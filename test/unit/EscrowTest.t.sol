@@ -7,6 +7,20 @@ import { Escrow } from "../../src/Escrow.sol";
 contract EscrowTest is Test {
     Escrow escrow;
 
+    // TEST CONSTANTS
+    uint256 constant EXPECTED_AMOUNT = 1 ether;
+    uint256 constant PROTOCOL_FEE_BPS = 100; // 1%
+    uint256 constant DEPOSIT_WINDOW = 1 days;
+    uint256 constant DELIVERY_WINDOW = 7 days;
+    uint256 constant EXPECTED_AMOUNT2 = 2 ether;
+    uint256 constant PROTOCOL_FEE_BPS2 = 200; // 2%
+    uint256 constant DEPOSIT_WINDOW2 = 3 days;
+    uint256 constant DELIVERY_WINDOW2 = 14 days;
+    uint256 constant BPS_DIVISOR = 10_000;
+    uint256 constant FEE = EXPECTED_AMOUNT * PROTOCOL_FEE_BPS / BPS_DIVISOR;
+    uint256 constant SELLER_AMOUNT = EXPECTED_AMOUNT - FEE;
+
+    // TEST ADDRESSES
     address buyer = makeAddr("buyer");
     address seller = makeAddr("seller");
     address arbiter = makeAddr("arbiter");
@@ -16,16 +30,30 @@ contract EscrowTest is Test {
     address arbiter2 = makeAddr("arbiter2");
     address owner2 = makeAddr("owner2");
 
-    uint256 constant EXPECTED_AMOUNT = 1 ether;
-    uint256 constant PROTOCOL_FEE_BPS = 100; // 1%
-    uint256 constant DEPOSIT_WINDOW = 1 days;
-    uint256 constant DELIVERY_WINDOW = 7 days;
-    uint256 constant EXPECTED_AMOUNT2 = 2 ether;
-    uint256 constant PROTOCOL_FEE_BPS2 = 200; // 2%
-    uint256 constant DEPOSIT_WINDOW2 = 3 days;
-    uint256 constant DELIVERY_WINDOW2 = 14 days;
-
+    // TEST EVENTS
     event Deposited(address indexed buyer, uint256 amount);
+    event DeliveryConfirmed(address indexed seller, uint256 amount);
+    event DisputeOpened(address indexed openedBy);
+    event DisputeResolved(bool releaseToSeller);
+    event Refunded(address indexed buyer, uint256 amount);
+    event Withdrawn(address indexed recipient, uint256 amount);
+
+    // TEST MODIFIERS
+    modifier withActiveEscrow() {
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+        _;
+    }
+
+    modifier withCompletedEscrow() {
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+        vm.prank(buyer);
+        escrow.confirmDelivery();
+        _;
+    }
 
     function setUp() public {
         escrow = new Escrow(
@@ -186,4 +214,91 @@ contract EscrowTest is Test {
         vm.expectRevert(Escrow.Escrow__DepositWindowExpired.selector);
         escrow.deposit{ value: EXPECTED_AMOUNT }();
     }
+
+    function testConfirmDelivery_happyPath() public withActiveEscrow {
+        vm.prank(buyer);
+        escrow.confirmDelivery();
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.COMPLETE));
+    }
+
+    function testConfirmDelivery_creditsSellerAndOwner() public withActiveEscrow {
+        vm.prank(buyer);
+        escrow.confirmDelivery();
+
+        assertEq(escrow.s_pendingWithdrawals(seller), SELLER_AMOUNT);
+        assertEq(escrow.s_pendingWithdrawals(owner), FEE);
+    }
+
+    function testConfirmDelivery_emitsDeliveryConfirmed() public withActiveEscrow {
+        vm.expectEmit(true, false, false, true);
+        emit DeliveryConfirmed(seller, EXPECTED_AMOUNT);
+
+        vm.prank(buyer);
+        escrow.confirmDelivery();
+    }
+
+    function testConfirmDelivery_revertsIfNotBuyer() public withActiveEscrow {
+        vm.prank(seller);
+        vm.expectRevert(Escrow.Escrow__NotBuyer.selector);
+        escrow.confirmDelivery();
+    }
+
+    function testConfirmDelivery_revertsIfWrongState() public {
+        vm.prank(buyer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Escrow.Escrow__WrongState.selector, Escrow.State.AWAITING_DELIVERY, Escrow.State.AWAITING_DEPOSIT
+            )
+        );
+        escrow.confirmDelivery();
+    }
+
+    function testConfirmDelivery_revertsIfAlreadyConfirmed() public withCompletedEscrow {
+        // Estado ya es COMPLETE por el modifier
+        vm.prank(buyer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Escrow.Escrow__WrongState.selector, Escrow.State.AWAITING_DELIVERY, Escrow.State.COMPLETE
+            )
+        );
+        escrow.confirmDelivery();
+    }
+
+    function testWithdraw_sellerHappyPath() public withCompletedEscrow {
+        vm.prank(seller);
+        escrow.withdraw();
+
+        assertEq(address(seller).balance, SELLER_AMOUNT);
+        assertEq(escrow.s_pendingWithdrawals(seller), 0);
+        assertEq(address(escrow).balance, FEE);
+    }
+
+    function testWithdraw_ownerHappyPath() public withCompletedEscrow {
+        vm.prank(owner);
+        escrow.withdraw();
+
+        assertEq(address(owner).balance, FEE);
+        assertEq(escrow.s_pendingWithdrawals(owner), 0);
+    }
+
+    function testWithdraw_revertsIfNothingPending() public withCompletedEscrow {
+        vm.prank(arbiter);
+        vm.expectRevert(Escrow.Escrow__NothingToWithdraw.selector);
+        escrow.withdraw();
+    }
+
+    function testWithdraw_revertsIfEscrowNotFinalized() public withActiveEscrow {
+        vm.prank(seller);
+        vm.expectRevert(Escrow.Escrow__EscrowNotFinalized.selector);
+        escrow.withdraw();
+    }
+
+    function testWithdraw_emitsWithdrawn() public withCompletedEscrow {
+        vm.expectEmit(true, false, false, true);
+        emit Withdrawn(seller, SELLER_AMOUNT);
+
+        vm.prank(seller);
+        escrow.withdraw();
+    }    
 }

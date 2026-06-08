@@ -17,6 +17,9 @@ contract Escrow {
     error Escrow__WrongState(State expected, State current);
     error Escrow__DepositWindowExpired();
     error Escrow__WrongPaymentAmount(uint256 sent, uint256 expected);
+    error Escrow__EscrowNotFinalized();
+    error Escrow__NothingToWithdraw();
+    error Escrow__WithdrawalFailed();
 
     // ENUMS
     enum State {
@@ -26,6 +29,9 @@ contract Escrow {
         COMPLETE,
         REFUNDED
     }
+
+    // CONSTANTS
+    uint256 private constant BPS_DIVISOR = 10_000;
 
     // STATE VARIABLES
     address public immutable i_buyer;
@@ -118,5 +124,34 @@ contract Escrow {
 
         // Interactions
         emit Deposited(msg.sender, msg.value);
+    }
+
+    function confirmDelivery() external onlyBuyer inState(State.AWAITING_DELIVERY) {
+        uint256 fee = (i_expectedAmount * i_protocolFeeBps) / BPS_DIVISOR;
+        uint256 sellerAmount = i_expectedAmount - fee;
+
+        // Effects
+        s_pendingWithdrawals[i_seller] += sellerAmount;
+        s_pendingWithdrawals[i_owner] += fee;
+        s_state = State.COMPLETE;
+
+        // Interactions
+        emit DeliveryConfirmed(i_seller, i_expectedAmount);
+    }
+
+    function withdraw() external {
+        // Checks
+        if (s_state != State.COMPLETE && s_state != State.REFUNDED) revert Escrow__EscrowNotFinalized();
+        uint256 amount = s_pendingWithdrawals[msg.sender];
+        if (amount == 0) revert Escrow__NothingToWithdraw();
+
+        // Effects
+        s_pendingWithdrawals[msg.sender] = 0;
+
+        // Interactions
+        (bool success,) = msg.sender.call{ value: amount }("");
+        if (!success) revert Escrow__WithdrawalFailed();
+
+        emit Withdrawn(msg.sender, amount);
     }
 }
