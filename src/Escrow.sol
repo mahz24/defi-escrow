@@ -11,6 +11,12 @@ contract Escrow {
     error Escrow__InvalidProtocolFee();
     error Escrow__InvalidDepositWindow();
     error Escrow__InvalidDeliveryWindow();
+    error Escrow__NotBuyer();
+    error Escrow__NotArbiter();
+    error Escrow__NotSellerOrBuyer();
+    error Escrow__WrongState(State expected, State current);
+    error Escrow__DepositWindowExpired();
+    error Escrow__WrongPaymentAmount(uint256 sent, uint256 expected);
 
     // ENUMS
     enum State {
@@ -45,6 +51,27 @@ contract Escrow {
     event Refunded(address indexed buyer, uint256 amount);
     event Withdrawn(address indexed recipient, uint256 amount);
 
+    // MODIFIERS
+    modifier onlyBuyer() {
+        if (msg.sender != i_buyer) revert Escrow__NotBuyer();
+        _;
+    }
+
+    modifier onlyArbiter() {
+        if (msg.sender != i_arbiter) revert Escrow__NotArbiter();
+        _;
+    }
+
+    modifier onlySellerOrBuyer() {
+        if (msg.sender != i_seller && msg.sender != i_buyer) revert Escrow__NotSellerOrBuyer();
+        _;
+    }
+
+    modifier inState(State expectedState) {
+        if (s_state != expectedState) revert Escrow__WrongState(expectedState, s_state);
+        _;
+    }
+
     constructor(
         address _buyer,
         address _seller,
@@ -76,5 +103,20 @@ contract Escrow {
         i_depositDeadline = block.timestamp + _depositWindow;
         i_deliveryWindow = _deliveryWindow;
         s_state = State.AWAITING_DEPOSIT;
+    }
+
+    function deposit() external payable onlyBuyer inState(State.AWAITING_DEPOSIT) {
+        // Checks
+        // Acceptable: deadline windows are measured in hours/days,
+        // validator timestamp wiggle (~15s) is negligible.
+        if (block.timestamp > i_depositDeadline) revert Escrow__DepositWindowExpired();
+        if (msg.value != i_expectedAmount) revert Escrow__WrongPaymentAmount(msg.value, i_expectedAmount);
+
+        // Effects
+        s_deliveryDeadline = block.timestamp + i_deliveryWindow;
+        s_state = State.AWAITING_DELIVERY;
+
+        // Interactions
+        emit Deposited(msg.sender, msg.value);
     }
 }

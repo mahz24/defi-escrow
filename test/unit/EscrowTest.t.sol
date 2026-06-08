@@ -25,6 +25,8 @@ contract EscrowTest is Test {
     uint256 constant DEPOSIT_WINDOW2 = 3 days;
     uint256 constant DELIVERY_WINDOW2 = 14 days;
 
+    event Deposited(address indexed buyer, uint256 amount);
+
     function setUp() public {
         escrow = new Escrow(
             buyer, seller, arbiter, owner, EXPECTED_AMOUNT, PROTOCOL_FEE_BPS, DEPOSIT_WINDOW, DELIVERY_WINDOW
@@ -118,5 +120,70 @@ contract EscrowTest is Test {
     function testConstructor_revertsIfDeliveryWindowZero() public {
         vm.expectRevert(Escrow.Escrow__InvalidDeliveryWindow.selector);
         new Escrow(buyer, seller, arbiter, owner, EXPECTED_AMOUNT, PROTOCOL_FEE_BPS, DEPOSIT_WINDOW, 0);
+    }
+
+    function testDeposit_happyPath() public {
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.AWAITING_DELIVERY));
+        assertEq(address(escrow).balance, EXPECTED_AMOUNT);
+        assertEq(escrow.s_deliveryDeadline(), block.timestamp + DELIVERY_WINDOW);
+    }
+
+    function testDeposit_emitsDeposited() public {
+        vm.deal(buyer, EXPECTED_AMOUNT);
+
+        vm.expectEmit(true, false, false, true);
+        emit Deposited(buyer, EXPECTED_AMOUNT);
+
+        vm.prank(buyer);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+    }
+
+    function testDeposit_revertsIfNotBuyer() public {
+        vm.deal(seller, EXPECTED_AMOUNT);
+        vm.prank(seller);
+        vm.expectRevert(Escrow.Escrow__NotBuyer.selector);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+    }
+
+    function testDeposit_revertsIfNotInAwaitingDeposit() public {
+        vm.deal(buyer, 2 * EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+
+        vm.prank(buyer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Escrow.Escrow__WrongState.selector, Escrow.State.AWAITING_DEPOSIT, Escrow.State.AWAITING_DELIVERY
+            )
+        );
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+    }
+
+    function testDeposit_revertsIfWrongAmount() public {
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(Escrow.Escrow__WrongPaymentAmount.selector, 0, EXPECTED_AMOUNT));
+        escrow.deposit{ value: 0 }();
+    }
+
+    function testDeposit_revertsIfAmountTooHigh() public {
+        vm.deal(buyer, 2 * EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        vm.expectRevert(
+            abi.encodeWithSelector(Escrow.Escrow__WrongPaymentAmount.selector, 2 * EXPECTED_AMOUNT, EXPECTED_AMOUNT)
+        );
+        escrow.deposit{ value: 2 * EXPECTED_AMOUNT }();
+    }
+
+    function testDeposit_revertsAfterDeadline() public {
+        vm.warp(block.timestamp + DEPOSIT_WINDOW + 1);
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        vm.expectRevert(Escrow.Escrow__DepositWindowExpired.selector);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
     }
 }
