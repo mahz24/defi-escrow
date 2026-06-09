@@ -55,6 +55,16 @@ contract EscrowTest is Test {
         _;
     }
 
+    modifier withDisputedEscrow() {
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrow.deposit{ value: EXPECTED_AMOUNT }();
+
+        vm.prank(buyer);
+        escrow.openDispute();
+        _;
+    }
+
     function setUp() public {
         escrow = new Escrow(
             buyer, seller, arbiter, owner, EXPECTED_AMOUNT, PROTOCOL_FEE_BPS, DEPOSIT_WINDOW, DELIVERY_WINDOW
@@ -300,5 +310,153 @@ contract EscrowTest is Test {
 
         vm.prank(seller);
         escrow.withdraw();
-    }    
+    }
+
+    function testOpenDispute_byBuyer() public withActiveEscrow {
+        vm.prank(buyer);
+        escrow.openDispute();
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.DISPUTED));
+    }
+
+    function testOpenDispute_bySeller() public withActiveEscrow {
+        vm.prank(seller);
+        escrow.openDispute();
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.DISPUTED));
+    }
+
+    function testOpenDispute_emitsDisputeOpened() public withActiveEscrow {
+        vm.expectEmit(true, false, false, false);
+        emit DisputeOpened(buyer);
+
+        vm.prank(buyer);
+        escrow.openDispute();
+    }
+
+    function testOpenDispute_revertsIfNotSellerOrBuyer() public withActiveEscrow {
+        vm.prank(arbiter);
+        vm.expectRevert(Escrow.Escrow__NotSellerOrBuyer.selector);
+        escrow.openDispute();
+    }
+
+    function testOpenDispute_revertsIfWrongState() public {
+        vm.prank(buyer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Escrow.Escrow__WrongState.selector, Escrow.State.AWAITING_DELIVERY, Escrow.State.AWAITING_DEPOSIT
+            )
+        );
+        escrow.openDispute();
+    }
+
+    function testResolveDispute_releaseToSeller_setsComplete() public withDisputedEscrow {
+        vm.prank(arbiter);
+        escrow.resolveDispute(true);
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.COMPLETE));
+    }
+
+    function testResolveDispute_releaseToSeller_creditsSellerAndOwner() public withDisputedEscrow {
+        vm.prank(arbiter);
+        escrow.resolveDispute(true);
+
+        assertEq(escrow.s_pendingWithdrawals(seller), SELLER_AMOUNT);
+        assertEq(escrow.s_pendingWithdrawals(owner), FEE);
+    }
+
+    function testResolveDispute_refundBuyer_setsRefunded() public withDisputedEscrow {
+        vm.prank(arbiter);
+        escrow.resolveDispute(false);
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.REFUNDED));
+    }
+
+    function testResolveDispute_refundBuyer_creditsBuyerFully() public withDisputedEscrow {
+        vm.prank(arbiter);
+        escrow.resolveDispute(false);
+
+        assertEq(escrow.s_pendingWithdrawals(buyer), EXPECTED_AMOUNT);
+        assertEq(escrow.s_pendingWithdrawals(seller), 0);
+        assertEq(escrow.s_pendingWithdrawals(owner), 0);
+    }
+
+    function testResolveDispute_emitsDisputeResolved() public withDisputedEscrow {
+        vm.expectEmit(false, false, false, true);
+        emit DisputeResolved(true);
+
+        vm.prank(arbiter);
+        escrow.resolveDispute(true);
+    }
+
+    function testResolveDispute_revertsIfNotArbiter() public withDisputedEscrow {
+        vm.prank(seller);
+        vm.expectRevert(Escrow.Escrow__NotArbiter.selector);
+        escrow.resolveDispute(true);
+    }
+
+    function testResolveDispute_revertsIfWrongState() public {
+        vm.prank(arbiter);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Escrow.Escrow__WrongState.selector, Escrow.State.DISPUTED, Escrow.State.AWAITING_DEPOSIT
+            )
+        );
+        escrow.resolveDispute(true);
+    }
+
+    function testRefundOnTimeout_happyPath() public withActiveEscrow {
+        vm.warp(escrow.s_deliveryDeadline() + 1);
+
+        escrow.refundOnTimeout();
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.REFUNDED));
+    }
+
+    function testRefundOnTimeout_creditsBuyerFully() public withActiveEscrow {
+        vm.warp(escrow.s_deliveryDeadline() + 1);
+        escrow.refundOnTimeout();
+
+        assertEq(escrow.s_pendingWithdrawals(buyer), EXPECTED_AMOUNT);
+        assertEq(escrow.s_pendingWithdrawals(seller), 0);
+        assertEq(escrow.s_pendingWithdrawals(owner), 0);
+    }
+
+    function testRefundOnTimeout_emitsRefunded() public withActiveEscrow {
+        vm.warp(escrow.s_deliveryDeadline() + 1);
+
+        vm.expectEmit(true, false, false, true);
+        emit Refunded(buyer, EXPECTED_AMOUNT);
+
+        escrow.refundOnTimeout();
+    }
+
+    function testRefundOnTimeout_anyoneCanCall() public withActiveEscrow {
+        vm.warp(escrow.s_deliveryDeadline() + 1);
+
+        address randomCaller = makeAddr("randomCaller");
+        vm.prank(randomCaller);
+        escrow.refundOnTimeout();
+
+        assertEq(uint256(escrow.s_state()), uint256(Escrow.State.REFUNDED));
+        assertEq(escrow.s_pendingWithdrawals(buyer), EXPECTED_AMOUNT);
+    }
+
+    function testRefundOnTimeout_revertsIfBeforeDeadline() public withActiveEscrow {
+        vm.warp(escrow.s_deliveryDeadline());
+
+        vm.expectRevert(Escrow.Escrow__DeliveryWindowNotExpired.selector);
+        escrow.refundOnTimeout();
+    }
+
+    function testRefundOnTimeout_revertsIfWrongState() public {
+        vm.warp(escrow.s_deliveryDeadline() + 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Escrow.Escrow__WrongState.selector, Escrow.State.AWAITING_DELIVERY, Escrow.State.AWAITING_DEPOSIT
+            )
+        );
+        escrow.refundOnTimeout();
+    }
 }

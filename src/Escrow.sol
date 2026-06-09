@@ -20,6 +20,7 @@ contract Escrow {
     error Escrow__EscrowNotFinalized();
     error Escrow__NothingToWithdraw();
     error Escrow__WithdrawalFailed();
+    error Escrow__DeliveryWindowNotExpired();
 
     // ENUMS
     enum State {
@@ -127,12 +128,9 @@ contract Escrow {
     }
 
     function confirmDelivery() external onlyBuyer inState(State.AWAITING_DELIVERY) {
-        uint256 fee = (i_expectedAmount * i_protocolFeeBps) / BPS_DIVISOR;
-        uint256 sellerAmount = i_expectedAmount - fee;
+        _creditSeller();
 
         // Effects
-        s_pendingWithdrawals[i_seller] += sellerAmount;
-        s_pendingWithdrawals[i_owner] += fee;
         s_state = State.COMPLETE;
 
         // Interactions
@@ -153,5 +151,37 @@ contract Escrow {
         if (!success) revert Escrow__WithdrawalFailed();
 
         emit Withdrawn(msg.sender, amount);
+    }
+
+    function openDispute() external onlySellerOrBuyer inState(State.AWAITING_DELIVERY) {
+        s_state = State.DISPUTED;
+        emit DisputeOpened(msg.sender);
+    }
+
+    function resolveDispute(bool releaseToSeller) external onlyArbiter inState(State.DISPUTED) {
+        if (releaseToSeller) {
+            _creditSeller();
+        } else {
+            s_pendingWithdrawals[i_buyer] += i_expectedAmount;
+        }
+
+        s_state = releaseToSeller ? State.COMPLETE : State.REFUNDED;
+        emit DisputeResolved(releaseToSeller);
+    }
+
+    function refundOnTimeout() external inState(State.AWAITING_DELIVERY) {
+        if (block.timestamp <= s_deliveryDeadline) revert Escrow__DeliveryWindowNotExpired();
+
+        s_pendingWithdrawals[i_buyer] += i_expectedAmount;
+        s_state = State.REFUNDED;
+
+        emit Refunded(i_buyer, i_expectedAmount);
+    }
+
+    function _creditSeller() internal {
+        uint256 fee = (i_expectedAmount * i_protocolFeeBps) / BPS_DIVISOR;
+
+        s_pendingWithdrawals[i_seller] += i_expectedAmount - fee;
+        s_pendingWithdrawals[i_owner] += fee;
     }
 }
