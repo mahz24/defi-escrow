@@ -243,7 +243,7 @@ contract EscrowTest is Test {
 
     function testConfirmDelivery_emitsDeliveryConfirmed() public withActiveEscrow {
         vm.expectEmit(true, false, false, true);
-        emit DeliveryConfirmed(seller, EXPECTED_AMOUNT);
+        emit DeliveryConfirmed(seller, SELLER_AMOUNT);
 
         vm.prank(buyer);
         escrow.confirmDelivery();
@@ -311,6 +311,43 @@ contract EscrowTest is Test {
 
         vm.prank(seller);
         escrow.withdraw();
+    }
+
+    function testWithdraw_buyerAfterRefund() public withActiveEscrow {
+        vm.warp(escrow.s_deliveryDeadline() + 1);
+        escrow.refundOnTimeout();
+
+        vm.prank(buyer);
+        escrow.withdraw();
+
+        assertEq(address(buyer).balance, EXPECTED_AMOUNT);
+        assertEq(escrow.s_pendingWithdrawals(buyer), 0);
+    }
+
+    function testWithdraw_revertsIfCallFails() public {
+        RejectingReceiver rejectingSeller = new RejectingReceiver();
+
+        Escrow escrowWithRejecting = new Escrow(
+            buyer,
+            address(rejectingSeller),
+            arbiter,
+            owner,
+            EXPECTED_AMOUNT,
+            PROTOCOL_FEE_BPS,
+            DEPOSIT_WINDOW,
+            DELIVERY_WINDOW
+        );
+
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrowWithRejecting.deposit{ value: EXPECTED_AMOUNT }();
+
+        vm.prank(buyer);
+        escrowWithRejecting.confirmDelivery();
+
+        vm.prank(address(rejectingSeller));
+        vm.expectRevert(Escrow.Escrow__WithdrawalFailed.selector);
+        escrowWithRejecting.withdraw();
     }
 
     function testOpenDispute_byBuyer() public withActiveEscrow {
@@ -459,31 +496,5 @@ contract EscrowTest is Test {
             )
         );
         escrow.refundOnTimeout();
-    }
-
-    function testWithdraw_revertsIfCallFails() public {
-        RejectingReceiver rejectingSeller = new RejectingReceiver();
-
-        Escrow escrowWithRejecting = new Escrow(
-            buyer,
-            address(rejectingSeller),
-            arbiter,
-            owner,
-            EXPECTED_AMOUNT,
-            PROTOCOL_FEE_BPS,
-            DEPOSIT_WINDOW,
-            DELIVERY_WINDOW
-        );
-
-        vm.deal(buyer, EXPECTED_AMOUNT);
-        vm.prank(buyer);
-        escrowWithRejecting.deposit{ value: EXPECTED_AMOUNT }();
-
-        vm.prank(buyer);
-        escrowWithRejecting.confirmDelivery();
-
-        vm.prank(address(rejectingSeller));
-        vm.expectRevert(Escrow.Escrow__WithdrawalFailed.selector);
-        escrowWithRejecting.withdraw();
     }
 }

@@ -128,13 +128,13 @@ contract Escrow {
     }
 
     function confirmDelivery() external onlyBuyer inState(State.AWAITING_DELIVERY) {
-        _creditSeller();
+        (uint256 sellerAmount,) = _creditSeller();
 
         // Effects
         s_state = State.COMPLETE;
 
         // Interactions
-        emit DeliveryConfirmed(i_seller, i_expectedAmount);
+        emit DeliveryConfirmed(i_seller, sellerAmount);
     }
 
     function withdraw() external {
@@ -178,10 +178,11 @@ contract Escrow {
         emit Refunded(i_buyer, i_expectedAmount);
     }
 
-    function _creditSeller() internal {
+    function _creditSeller() internal returns (uint256, uint256) {
         uint256 fee = (i_expectedAmount * i_protocolFeeBps) / BPS_DIVISOR;
 
         s_pendingWithdrawals[i_seller] += i_expectedAmount - fee;
         s_pendingWithdrawals[i_owner] += fee;
+        return (i_expectedAmount - fee, fee);
     }
 }
