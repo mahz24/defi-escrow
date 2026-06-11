@@ -16,7 +16,7 @@ Built with Solidity `0.8.19` and Foundry. **100% test coverage** across lines, s
 
 | Network | Address | Etherscan |
 |---|---|---|
-| **Sepolia** | `0x44b1D00C20f7960b235dFFe4fF9C69C4bb0AC679` | [View verified source](https://sepolia.etherscan.io/address/0x44b1d00c20f7960b235dffe4ff9c69c4bb0ac679#code) |
+| **Sepolia** | `0x6eF18B176d1d67AaF73F05413077B9842Fe83A5C` | [View verified source](https://sepolia.etherscan.io/address/0x6ef18b176d1d67aaf73f05413077b9842fe83a5c#code) |
 
 The contract source code is verified on Etherscan — anyone can read the Solidity directly or interact with the contract through the "Write Contract" tab.
 
