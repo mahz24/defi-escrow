@@ -30,3 +30,4 @@ docs/
 Thumbs.db
 
 .claude/
+lcov.info
