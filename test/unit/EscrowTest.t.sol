@@ -3,6 +3,7 @@ pragma solidity 0.8.19;
 
 import { Test } from "forge-std/Test.sol";
 import { Escrow } from "../../src/Escrow.sol";
+import { RejectingReceiver } from "../mocks/RejectingReceiver.sol";
 
 contract EscrowTest is Test {
     Escrow escrow;
@@ -459,4 +460,24 @@ contract EscrowTest is Test {
         );
         escrow.refundOnTimeout();
     }
+
+    function testWithdraw_revertsIfCallFails() public {
+      RejectingReceiver rejectingSeller = new RejectingReceiver();
+
+      Escrow escrowWithRejecting = new Escrow(
+          buyer, address(rejectingSeller), arbiter, owner,
+          EXPECTED_AMOUNT, PROTOCOL_FEE_BPS, DEPOSIT_WINDOW, DELIVERY_WINDOW
+      );
+
+      vm.deal(buyer, EXPECTED_AMOUNT);
+      vm.prank(buyer);
+      escrowWithRejecting.deposit{ value: EXPECTED_AMOUNT }();
+
+      vm.prank(buyer);
+      escrowWithRejecting.confirmDelivery();
+
+      vm.prank(address(rejectingSeller));
+      vm.expectRevert(Escrow.Escrow__WithdrawalFailed.selector);
+      escrowWithRejecting.withdraw();
+  }
 }
