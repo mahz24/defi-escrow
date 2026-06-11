@@ -462,22 +462,28 @@ contract EscrowTest is Test {
     }
 
     function testWithdraw_revertsIfCallFails() public {
-      RejectingReceiver rejectingSeller = new RejectingReceiver();
+        RejectingReceiver rejectingSeller = new RejectingReceiver();
 
-      Escrow escrowWithRejecting = new Escrow(
-          buyer, address(rejectingSeller), arbiter, owner,
-          EXPECTED_AMOUNT, PROTOCOL_FEE_BPS, DEPOSIT_WINDOW, DELIVERY_WINDOW
-      );
+        Escrow escrowWithRejecting = new Escrow(
+            buyer,
+            address(rejectingSeller),
+            arbiter,
+            owner,
+            EXPECTED_AMOUNT,
+            PROTOCOL_FEE_BPS,
+            DEPOSIT_WINDOW,
+            DELIVERY_WINDOW
+        );
 
-      vm.deal(buyer, EXPECTED_AMOUNT);
-      vm.prank(buyer);
-      escrowWithRejecting.deposit{ value: EXPECTED_AMOUNT }();
+        vm.deal(buyer, EXPECTED_AMOUNT);
+        vm.prank(buyer);
+        escrowWithRejecting.deposit{ value: EXPECTED_AMOUNT }();
 
-      vm.prank(buyer);
-      escrowWithRejecting.confirmDelivery();
+        vm.prank(buyer);
+        escrowWithRejecting.confirmDelivery();
 
-      vm.prank(address(rejectingSeller));
-      vm.expectRevert(Escrow.Escrow__WithdrawalFailed.selector);
-      escrowWithRejecting.withdraw();
-  }
+        vm.prank(address(rejectingSeller));
+        vm.expectRevert(Escrow.Escrow__WithdrawalFailed.selector);
+        escrowWithRejecting.withdraw();
+    }
 }
