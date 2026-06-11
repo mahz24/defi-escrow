@@ -6,7 +6,7 @@ Built with Solidity `0.8.19` and Foundry. **100% test coverage** across lines, s
 
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.19-363636?logo=solidity)](https://docs.soliditylang.org/en/v0.8.19/)
 [![Foundry](https://img.shields.io/badge/Built%20with-Foundry-orange)](https://book.getfoundry.sh/)
-[![Tests](https://img.shields.io/badge/Tests-52%20passing-brightgreen)]()
+[![CI](https://github.com/mahz24/defi-escrow/actions/workflows/ci.yml/badge.svg)](https://github.com/mahz24/defi-escrow/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
