@@ -4,11 +4,16 @@ test = "test"
 script = "script"
 out = "out"
 libs = ["lib"]
-solc = "0.8.19"
+solc = "0.8.28"
+evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 verbosity = 2
 fs_permissions = [{ access = "read", path = "./broadcast" }]
+
+[lint]
+# s_/i_ prefixes are an intentional convention (storage/immutable visible at the call site).
+exclude_lints = ["mixed-case-variable", "screaming-snake-case-immutable", "asm-keccak256", "unwrapped-modifier-logic"]
 
 [fuzz]
 runs = 256

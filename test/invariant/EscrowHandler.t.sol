@@ -1,28 +1,33 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.19;
+pragma solidity 0.8.28;
 
 import { Test } from "forge-std/Test.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Escrow } from "../../src/Escrow.sol";
+import { MockERC20 } from "../mocks/MockERC20.sol";
 
-/// @notice Drives the Escrow through random, *valid* sequences of actions by every role,
-///         interleaved with time jumps. Ghost variables record what happened so the invariant
-///         suite can compare the contract's accounting against an independent model.
+/// @notice Drives one Escrow (ETH or ERC-20) through random, *valid* sequences of actions by every role,
+///         interleaved with time jumps and unsolicited donations. Ghost variables record what happened so the
+///         invariant suite can compare the contract's accounting against an independent model.
 contract EscrowHandler is Test {
     Escrow public escrow;
+    address public token; // address(0) = ETH
     address public buyer;
     address public seller;
     address public arbiter;
-    address public owner;
+    address public feeRecipient;
+    address public sink = makeAddr("withdrawToSink");
 
     // Ghost variables
     bool public ghost_deposited;
+    uint256 public ghost_donated;
     uint256 public ghost_totalWithdrawn;
     mapping(address => uint256) public ghost_withdrawnBy;
     uint256 public ghost_maxStateRank;
     bool public ghost_stateWentBackwards;
     bool public ghost_terminalStateChanged;
-    Escrow.State public ghost_firstTerminalState;
     bool public ghost_reachedTerminal;
+    Escrow.State public ghost_firstTerminalState;
 
     mapping(bytes32 => uint256) public calls;
 
@@ -34,10 +39,11 @@ contract EscrowHandler is Test {
 
     constructor(Escrow _escrow) {
         escrow = _escrow;
-        buyer = _escrow.i_buyer();
-        seller = _escrow.i_seller();
-        arbiter = _escrow.i_arbiter();
-        owner = _escrow.i_owner();
+        token = _escrow.s_token();
+        buyer = _escrow.s_buyer();
+        seller = _escrow.s_seller();
+        arbiter = _escrow.s_arbiter();
+        feeRecipient = _escrow.s_feeRecipient();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -45,12 +51,20 @@ contract EscrowHandler is Test {
     //////////////////////////////////////////////////////////////*/
     function deposit() external track("deposit") {
         if (escrow.s_state() != Escrow.State.AWAITING_DEPOSIT) return;
-        if (block.timestamp > escrow.i_depositDeadline()) return;
+        if (block.timestamp > escrow.s_depositDeadline()) return;
 
-        uint256 amount = escrow.i_expectedAmount();
-        vm.deal(buyer, buyer.balance + amount);
-        vm.prank(buyer);
-        escrow.deposit{ value: amount }();
+        uint256 amount = escrow.s_amount();
+        if (token == address(0)) {
+            vm.deal(buyer, buyer.balance + amount);
+            vm.prank(buyer);
+            escrow.deposit{ value: amount }();
+        } else {
+            MockERC20(token).mint(buyer, amount);
+            vm.startPrank(buyer);
+            IERC20(token).approve(address(escrow), amount);
+            escrow.deposit();
+            vm.stopPrank();
+        }
         ghost_deposited = true;
     }
 
@@ -88,7 +102,7 @@ contract EscrowHandler is Test {
         escrow.refundOnDisputeTimeout();
     }
 
-    function withdraw(uint256 actorSeed) external track("withdraw") {
+    function withdraw(uint256 actorSeed, bool toSink) external track("withdraw") {
         Escrow.State s = escrow.s_state();
         if (s != Escrow.State.COMPLETE && s != Escrow.State.REFUNDED) return;
 
@@ -96,13 +110,26 @@ contract EscrowHandler is Test {
         uint256 pending = escrow.s_pendingWithdrawals(actor);
         if (pending == 0) return;
 
-        uint256 balanceBefore = actor.balance;
+        address recipient = toSink ? sink : actor;
+        uint256 balanceBefore = _balance(recipient);
         vm.prank(actor);
-        escrow.withdraw();
+        if (toSink) escrow.withdrawTo(sink);
+        else escrow.withdraw();
 
-        assertEq(actor.balance - balanceBefore, pending, "withdraw paid a wrong amount");
+        assertEq(_balance(recipient) - balanceBefore, pending, "withdraw paid a wrong amount");
         ghost_totalWithdrawn += pending;
         ghost_withdrawnBy[actor] += pending;
+    }
+
+    /// @dev Unsolicited funds: forced ETH (as via selfdestruct/coinbase) or a direct token transfer.
+    function donate(uint256 amount) external track("donate") {
+        amount = bound(amount, 1, 1e24);
+        if (token == address(0)) {
+            vm.deal(address(escrow), address(escrow).balance + amount);
+        } else {
+            MockERC20(token).mint(address(escrow), amount);
+        }
+        ghost_donated += amount;
     }
 
     function warp(uint256 seconds_) external track("warp") {
@@ -112,11 +139,15 @@ contract EscrowHandler is Test {
     /*//////////////////////////////////////////////////////////////
                                 HELPERS
     //////////////////////////////////////////////////////////////*/
+    function _balance(address who) internal view returns (uint256) {
+        return token == address(0) ? who.balance : IERC20(token).balanceOf(who);
+    }
+
     function _actor(uint256 seed) internal view returns (address) {
         uint256 i = seed % 3;
         if (i == 0) return buyer;
         if (i == 1) return seller;
-        return owner;
+        return feeRecipient;
     }
 
     function _rank(Escrow.State s) internal pure returns (uint256) {
