@@ -5,6 +5,8 @@ import { Script } from "forge-std/Script.sol";
 import { Escrow } from "../src/Escrow.sol";
 import { HelperConfig } from "./HelperConfig.s.sol";
 
+/// @title DeployEscrow
+/// @notice Deploys a single Escrow using the per-network parameters from HelperConfig.
 contract DeployEscrow is Script {
     function run() external returns (Escrow, HelperConfig) {
         HelperConfig helperConfig = new HelperConfig();
@@ -19,7 +21,8 @@ contract DeployEscrow is Script {
             config.expectedAmount,
             config.protocolFeeBps,
             config.depositWindow,
-            config.deliveryWindow
+            config.deliveryWindow,
+            config.disputeWindow
         );
         vm.stopBroadcast();
 
