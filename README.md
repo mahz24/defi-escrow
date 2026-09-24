@@ -37,10 +37,12 @@ checked in CI by Slither, a gas snapshot and a coverage gate.
 
 | Network | Version | Address | Etherscan |
 |---|---|---|---|
-| **Sepolia** | v2 | `0x6eF18B176d1d67AaF73F05413077B9842Fe83A5C` | [Verified source](https://sepolia.etherscan.io/address/0x6ef18b176d1d67aaf73f05413077b9842fe83a5c#code) |
+| **Sepolia** | **v3** (current) | `0x5056e4b39e335916741bb0d2e7a5F039CEf15495` | [Verified source](https://sepolia.etherscan.io/address/0x5056e4b39e335916741bb0d2e7a5f039cef15495#code) |
+| Sepolia | v2 (legacy) | `0x6eF18B176d1d67AaF73F05413077B9842Fe83A5C` | [Verified source](https://sepolia.etherscan.io/address/0x6ef18b176d1d67aaf73f05413077b9842fe83a5c#code) |
 
-> The current source (**v3**, with dispute timeouts) is pending redeployment. Run
-> `make deploy-sepolia` and update this table. See the [changelog](./DESIGN.md#12-changelog).
+The v3 deployment uses the Sepolia parameters from [`HelperConfig`](./script/HelperConfig.s.sol): 0.01 ETH escrow,
+1% fee, and deposit/delivery/dispute windows of 1/7/3 days. You can read the source or interact with the contract in
+Etherscan's *Read/Write Contract* tabs. Version history is in the [changelog](./DESIGN.md#12-changelog).
 
 ---
 

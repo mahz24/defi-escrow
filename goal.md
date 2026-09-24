@@ -96,7 +96,7 @@ Un contrato de custodia (escrow) descentralizado donde:
 - [x] Slither en CI (SARIF) + `SECURITY.md` con threat model y triage
 - [x] Gate de coverage y `forge snapshot --check` en CI
 - [x] Deploy con keystore cifrado (sin private key en texto plano)
-- [ ] Redeploy v3 en Sepolia y actualizar README
+- [x] Redeploy v3 en Sepolia y actualizar README
 
 ---
 
