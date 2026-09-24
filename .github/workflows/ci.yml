@@ -24,10 +24,12 @@ jobs:
         with:
           submodules: recursive
 
+      # Pinned: per-test gas accounting changes between Forge releases, so the
+      # .gas-snapshot baseline is only comparable with the version that generated it.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.5.1
 
       - name: Show Forge version
         run: forge --version
