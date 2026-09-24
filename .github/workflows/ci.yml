@@ -46,13 +46,15 @@ jobs:
       - name: Gas snapshot check
         run: forge snapshot --check --tolerance 1 --no-match-path "test/{fuzz,invariant}/*"
 
-      - name: Coverage gate (Escrow.sol must stay at 100%)
+      - name: Coverage gate (every src/ contract must stay at 100%)
         env:
           FOUNDRY_PROFILE: default
         run: |
           forge coverage --report summary --no-match-coverage "test|script" | tee coverage.txt
-          hits=$(grep -E "^\| src/Escrow.sol" coverage.txt | grep -o "100.00%" | wc -l)
-          if [ "$hits" -ne 4 ]; then echo "::error::src/Escrow.sol is not at 100% lines/statements/branches/functions"; exit 1; fi
+          for f in src/Escrow.sol src/EscrowFactory.sol; do
+            hits=$(grep -E "^\| $f " coverage.txt | grep -o "100.00%" | wc -l)
+            if [ "$hits" -ne 4 ]; then echo "::error::$f is not at 100% lines/statements/branches/functions"; exit 1; fi
+          done
 
   slither:
     name: Static analysis (Slither)

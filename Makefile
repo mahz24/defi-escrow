@@ -27,9 +27,9 @@ help:
 	@echo "  slither         Run Slither static analysis"
 	@echo "  clean           Remove build artifacts"
 	@echo "  anvil           Start a local Anvil node"
-	@echo "  deploy-anvil    Deploy to local Anvil (requires anvil running)"
-	@echo "  deploy-sepolia  Deploy to Sepolia and verify (uses encrypted keystore ACCOUNT)"
-	@echo "  verify          Re-verify the latest Sepolia deployment"
+	@echo "  deploy-anvil    Deploy the factory to local Anvil (requires anvil running)"
+	@echo "  deploy-sepolia  Deploy the factory to Sepolia + verify (encrypted keystore ACCOUNT)"
+	@echo "  verify          Re-verify a Sepolia deployment (FACTORY=0x...)"
 	@echo ""
 
 install:
@@ -81,7 +81,7 @@ anvil:
 	@anvil
 
 deploy-anvil:
-	@forge script script/DeployEscrow.s.sol \
+	@forge script script/DeployEscrowFactory.s.sol \
 		--rpc-url $(ANVIL_RPC_URL) \
 		--private-key $(DEFAULT_ANVIL_KEY) \
 		--broadcast
@@ -89,20 +89,21 @@ deploy-anvil:
 # Uses an encrypted keystore instead of a plaintext private key:
 #   cast wallet import $(ACCOUNT) --interactive
 deploy-sepolia:
-	@forge script script/DeployEscrow.s.sol \
+	@forge script script/DeployEscrowFactory.s.sol \
 		--rpc-url $(SEPOLIA_RPC_URL) \
 		--account $(ACCOUNT) \
 		--broadcast \
 		--verify \
 		--etherscan-api-key $(ETHERSCAN_API_KEY)
 
-# Re-verify the latest Sepolia deployment (use when --verify timed out)
-# Reads address from broadcast/DeployEscrow.s.sol/11155111/run-latest.json
+# Re-verify a Sepolia deployment (use when --verify timed out): make verify FACTORY=0x...
+# Verifies the factory (constructor args guessed from the creation tx) and the Escrow implementation it deployed.
 verify:
-	@LAST_ADDR=$$(jq -r '.transactions[] | select(.contractName=="Escrow") | .contractAddress' broadcast/DeployEscrow.s.sol/11155111/run-latest.json); \
-	LAST_ARGS=$$(jq -r '.transactions[] | select(.contractName=="Escrow") | .arguments | join(" ")' broadcast/DeployEscrow.s.sol/11155111/run-latest.json); \
-	echo "Re-verifying $$LAST_ADDR ..."; \
-	forge verify-contract $$LAST_ADDR src/Escrow.sol:Escrow \
-		--chain sepolia \
-		--etherscan-api-key $(ETHERSCAN_API_KEY) \
-		--constructor-args $$(cast abi-encode "constructor(address,address,address,address,uint256,uint256,uint256,uint256,uint256)" $$LAST_ARGS)
+	@test -n "$(FACTORY)" || (echo "usage: make verify FACTORY=0x<factory address>" && exit 1)
+	@forge verify-contract $(FACTORY) src/EscrowFactory.sol:EscrowFactory \
+		--chain sepolia --rpc-url $(SEPOLIA_RPC_URL) --guess-constructor-args \
+		--etherscan-api-key $(ETHERSCAN_API_KEY) --watch
+	@IMPL=$$(cast call $(FACTORY) "i_implementation()(address)" --rpc-url $(SEPOLIA_RPC_URL)); \
+	echo "Verifying Escrow implementation $$IMPL ..."; \
+	forge verify-contract $$IMPL src/Escrow.sol:Escrow \
+		--chain sepolia --etherscan-api-key $(ETHERSCAN_API_KEY) --watch
