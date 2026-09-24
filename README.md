@@ -1,15 +1,19 @@
-# Escrow Smart Contract
+# Escrow Protocol
 
-A trust-minimized ETH escrow between a buyer and a seller. It has arbiter-based dispute resolution
-and **permissionless timeouts, so funds can never be locked forever**.
+A trust-minimized escrow protocol for **native ETH and any standard ERC-20**. An `EscrowFactory`
+deploys one cheap [EIP-1167](https://eips.ethereum.org/EIPS/eip-1167) clone per trade, at an
+address you can predict before it exists. Each escrow has arbiter-based dispute resolution and
+**permissionless timeouts, so funds can never be locked forever**.
 
-Built with Solidity `0.8.19` and Foundry. It has **102 tests** (unit, integration, fuzz and
-stateful invariant tests) and **100% line, branch and function coverage**. Every change is
-checked in CI by Slither, a gas snapshot and a coverage gate.
+Built with Solidity `0.8.28`, Foundry and OpenZeppelin 5. It has **192 tests** (unit, integration,
+fuzz, and stateful invariant tests run against both ETH and ERC-20), with **100% line, branch and
+function coverage** on every contract and script. Every change is checked in CI by Slither, a gas
+snapshot and a coverage gate.
 
 [![CI](https://github.com/mahz24/defi-escrow/actions/workflows/ci.yml/badge.svg)](https://github.com/mahz24/defi-escrow/actions/workflows/ci.yml)
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.19-363636?logo=solidity)](https://docs.soliditylang.org/en/v0.8.19/)
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.28-363636?logo=solidity)](https://docs.soliditylang.org/en/v0.8.28/)
 [![Foundry](https://img.shields.io/badge/Built%20with-Foundry-orange)](https://book.getfoundry.sh/)
+[![OpenZeppelin](https://img.shields.io/badge/OpenZeppelin-5.7-4E5EE4?logo=openzeppelin)](https://docs.openzeppelin.com/contracts/5.x/)
 [![Coverage](https://img.shields.io/badge/Coverage-100%25-brightgreen)](#-testing)
 [![Slither](https://img.shields.io/badge/Slither-0%20high%20%7C%200%20medium-brightgreen)](./SECURITY.md#slither-triage)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
@@ -18,18 +22,27 @@ checked in CI by Slither, a gas snapshot and a coverage gate.
 
 ## ✨ Highlights
 
-- **Formal-ish spec first.** [`DESIGN.md`](./DESIGN.md) defines the state machine, transition
-  table, invariants and must-revert cases *before* the code. The tests are written against that spec.
-- **Stateful invariant testing.** A handler drives random sequences of deposits, disputes,
-  resolutions, timeouts, withdrawals and time jumps (128k+ calls per run). After every call, 8 accounting
-  and state-machine invariants are checked. A mutation check confirms the suite actually catches bugs.
-- **Liveness by design.** An absent buyer or an absent arbiter can't freeze funds. Anyone can
-  trigger the refund once the corresponding deadline passes.
-- **Pull payments + strict CEI.** A malicious or broken receiver only hurts itself. A re-entrancy
-  attack is simulated and fails in the tests.
-- **Security write-up.** [`SECURITY.md`](./SECURITY.md) includes a threat model, the Slither triage and known limitations.
-- **Production-style tooling.** HelperConfig deployment, encrypted keystore (no plaintext keys),
-  Etherscan verification, Makefile, and CI with format, build, tests, gas snapshot, coverage gate and Slither SARIF.
+- **Factory + minimal proxies.** Each trade is a 45-byte clone with isolated storage and funds.
+  CREATE2 addresses are bound to the creator, so buyers can `approve` or share the escrow
+  *before* it's deployed, and nobody can squat the address.
+- **ETH and ERC-20, including the tricky ones.** `SafeERC20` handles USDT-style tokens,
+  fee-on-transfer tokens are rejected, and `withdrawTo()` rescues USDC-blocklisted or
+  non-receiving recipients. Each of these is covered by a dedicated malicious or quirky token mock.
+- **Spec-first.** [`DESIGN.md`](./DESIGN.md) defines the state machine, storage layout,
+  invariants and must-revert cases. The tests are written against it.
+- **Stateful invariant testing.** 8 invariants run against ETH *and* ERC-20. Handlers mix random
+  actions, time jumps and forced donations. A mutation check shows all 16 invariant checks catch
+  an injected accounting bug.
+- **Liveness by design.** An absent buyer or arbiter can't freeze funds. Anyone can trigger the
+  refund after the deadline.
+- **Gas-aware.** Storage is packed from 12 slots to 7 (about 20% cheaper `initialize`), with a
+  transient-storage reentrancy guard (EIP-1153). A new trade costs about 3.7× less gas than
+  deploying a standalone escrow.
+- **Security write-up.** [`SECURITY.md`](./SECURITY.md) has the threat model, token-quirk
+  matrix and Slither triage.
+- **Production-style tooling.** `Ownable2Step` admin, encrypted-keystore deployment, Etherscan
+  verification, Makefile, and CI with format, build, tests, gas snapshot, coverage gate and
+  Slither SARIF.
 
 ---
 
@@ -37,35 +50,57 @@ checked in CI by Slither, a gas snapshot and a coverage gate.
 
 | Network | Version | Address | Etherscan |
 |---|---|---|---|
-| **Sepolia** | **v3** (current) | `0x5056e4b39e335916741bb0d2e7a5F039CEf15495` | [Verified source](https://sepolia.etherscan.io/address/0x5056e4b39e335916741bb0d2e7a5f039cef15495#code) |
+| **Sepolia** | **v3** (single escrow) | `0x5056e4b39e335916741bb0d2e7a5F039CEf15495` | [Verified source](https://sepolia.etherscan.io/address/0x5056e4b39e335916741bb0d2e7a5f039cef15495#code) |
 | Sepolia | v2 (legacy) | `0x6eF18B176d1d67AaF73F05413077B9842Fe83A5C` | [Verified source](https://sepolia.etherscan.io/address/0x6ef18b176d1d67aaf73f05413077b9842fe83a5c#code) |
 
-The v3 deployment uses the Sepolia parameters from [`HelperConfig`](./script/HelperConfig.s.sol): 0.01 ETH escrow,
-1% fee, and deposit/delivery/dispute windows of 1/7/3 days. You can read the source or interact with the contract in
-Etherscan's *Read/Write Contract* tabs. Version history is in the [changelog](./DESIGN.md#12-changelog).
+> **v4 (factory + ERC-20)** is pending deployment. Run `make deploy-sepolia` and add the
+> `EscrowFactory` address here. Version history is in the [changelog](./DESIGN.md#12-changelog).
 
 ---
 
-## 📖 How it works
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    Owner([Factory owner]) -- "setProtocolFee / setFeeRecipient<br/>(future escrows only)" --> F
+    Creator([Anyone]) -- "createEscrow(params, salt)" --> F[EscrowFactory<br/>Ownable2Step]
+    F -- "deploys once" --> I[Escrow implementation<br/>initializers disabled]
+    F -- "CREATE2 clone + initialize" --> E1[Escrow clone #1<br/>ETH]
+    F -- "CREATE2 clone + initialize" --> E2[Escrow clone #2<br/>USDC]
+    E1 -. delegatecall .-> I
+    E2 -. delegatecall .-> I
+    F -- "index" --> IDX[(escrows by<br/>buyer / seller / arbiter)]
+```
+
+- **Per-trade isolation.** Every clone has its own storage and balance.
+- **Fee snapshot.** The protocol fee and recipient are copied into each escrow at creation.
+  Changing them never affects live trades.
+- **Discoverability.** `getEscrowsByParticipant(addr, offset, limit)` returns a user's trade
+  history, and `EscrowCreated` lets indexers discover every trade.
+
+## 📖 How a trade works
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Buyer
     actor Seller
+    participant Factory
     participant Escrow
     actor Arbiter
 
-    Buyer->>Escrow: deposit() — exact amount
-    Note over Escrow: AWAITING_DELIVERY<br/>delivery deadline starts
+    Buyer->>Factory: createEscrow(terms, salt)
+    Factory->>Escrow: clone + initialize
+    Note over Escrow: AWAITING_DEPOSIT
+    Buyer->>Escrow: deposit() — ETH value or pulls approved ERC-20
+    Note over Escrow: AWAITING_DELIVERY
     Seller-->>Buyer: delivers off-chain
 
     alt Happy path
         Buyer->>Escrow: confirmDelivery()
-        Note over Escrow: COMPLETE — seller & owner credited
-    else Something went wrong (before delivery deadline)
+        Note over Escrow: COMPLETE — seller & fee recipient credited
+    else Dispute (before delivery deadline)
         Buyer->>Escrow: openDispute()  (or Seller)
-        Note over Escrow: DISPUTED<br/>dispute deadline starts
         alt Arbiter acts in time
             Arbiter->>Escrow: resolveDispute(releaseToSeller)
         else Arbiter is absent
@@ -76,14 +111,14 @@ sequenceDiagram
         Note over Escrow: REFUNDED — buyer credited 100%
     end
 
-    Seller->>Escrow: withdraw()  (pull payment — whoever was credited)
+    Seller->>Escrow: withdraw() / withdrawTo(addr)  (pull payment)
 ```
 
 ### State machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> AWAITING_DEPOSIT
+    [*] --> AWAITING_DEPOSIT: createEscrow()
     AWAITING_DEPOSIT --> AWAITING_DELIVERY: deposit()
     AWAITING_DELIVERY --> COMPLETE: confirmDelivery()
     AWAITING_DELIVERY --> DISPUTED: openDispute() ≤ delivery deadline
@@ -91,73 +126,91 @@ stateDiagram-v2
     DISPUTED --> COMPLETE: resolveDispute(true) ≤ dispute deadline
     DISPUTED --> REFUNDED: resolveDispute(false) ≤ dispute deadline
     DISPUTED --> REFUNDED: refundOnDisputeTimeout() > dispute deadline
-    COMPLETE --> [*]: withdraw()
-    REFUNDED --> [*]: withdraw()
+    COMPLETE --> [*]: withdraw() / withdrawTo()
+    REFUNDED --> [*]: withdraw() / withdrawTo()
 ```
 
-The full transition table (callers, time conditions, effects and events) is in
-[`DESIGN.md`](./DESIGN.md#4-transition-table).
+The full transition table is in [`DESIGN.md`](./DESIGN.md#5-transition-table).
 
 ### Economics
-- The **protocol fee** (default 1%, hard cap 5%) is charged **only when the seller gets paid**.
-  Refunds always return 100% to the buyer.
+- The protocol fee (default 1%, hard cap 5%) is charged **only when the seller gets paid**.
+  Refunds always return 100%.
 - Fee rounding favours the seller: `fee = amount * bps / 10_000` rounds down.
+
+---
+
+## 🪙 Token support
+
+| Token type | Example | Supported | How |
+|---|---|---|---|
+| Native ETH | ETH | ✅ | `token = address(0)`, exact `msg.value` |
+| Standard ERC-20 | DAI, WETH | ✅ | `SafeERC20.safeTransferFrom` |
+| No return value | USDT | ✅ | `SafeERC20` |
+| Blocklist | USDC | ✅ | Pull payments + `withdrawTo()` escape hatch |
+| Transfer hooks | ERC-777-like | ✅ | `nonReentrant` + CEI |
+| Fee-on-transfer | deflationary tokens | ❌ rejected | Balance-diff check reverts the deposit |
+| Rebasing | stETH, AMPL | ❌ | Balance drifts from the recorded amount (documented) |
 
 ---
 
 ## 🧪 Testing
 
-| Suite | File | What it proves |
+| Suite | Tests | What it proves |
 |---|---|---|
-| **Unit** (78) | [`test/unit/EscrowTest.t.sol`](./test/unit/EscrowTest.t.sol) | Every function, every revert, every event, and exact deadline boundaries (`deadline` vs `deadline + 1`). It also covers reentrancy and rejecting-receiver attacks with dedicated mocks. |
-| **Fuzz** (10) | [`test/fuzz/EscrowFuzzTest.t.sol`](./test/fuzz/EscrowFuzzTest.t.sol) | Properties that hold for *any* input: the fee split is exact and capped for amounts up to 1e30, dispute resolution conserves funds, only the right roles can act, and deadlines are respected for any timestamp. 10,000 runs per test in CI. |
-| **Invariant** (8) | [`test/invariant/`](./test/invariant) | Stateful fuzzing through a handler with ghost variables. It checks fund conservation, solvency, exclusive outcomes, monotonic state machine, deadline consistency and the fee cap across random multi-step scenarios. |
-| **Integration** (6) | [`test/integration/DeployEscrowTest.t.sol`](./test/integration/DeployEscrowTest.t.sol) | Runs the real deploy script, validates the per-network config, and drives full lifecycles end to end (including the "arbiter disappears" scenario). |
+| **Lifecycle** ([`EscrowLifecycleTests`](./test/unit/EscrowLifecycleTests.sol)) | 51 × 2 | Every function, revert, event and deadline boundary. Written once, **run for both ETH and a 6-decimals ERC-20**. |
+| **ETH-specific** ([`EscrowEthTest`](./test/unit/EscrowEthTest.t.sol)) | 6 | Exact `msg.value`, rejecting receivers, `withdrawTo` rescue, reentrancy attack. |
+| **ERC-20-specific** ([`EscrowErc20Test`](./test/unit/EscrowErc20Test.t.sol)) | 9 | USDT no-return, fee-on-transfer rejection, USDC blocklist + rescue, re-entrant token hooks during deposit/withdraw, donations. |
+| **Initialization** ([`EscrowInitializeTest`](./test/unit/EscrowInitializeTest.t.sol)) | 19 | Locked implementation, no re-initialization, every parameter check (incl. `uint32` window overflow). |
+| **Factory** ([`EscrowFactoryTest`](./test/unit/EscrowFactoryTest.t.sol)) | 21 | Predicted addresses, salt bound to creator, 45-byte clones, gas vs full deploy, indexing and pagination, fee snapshotting, `Ownable2Step`. |
+| **Fuzz** ([`EscrowFuzzTest`](./test/fuzz/EscrowFuzzTest.t.sol)) | 12 | Properties for any input, with the asset itself fuzzed: exact fee split up to 1e30, conservation for any ruling, role checks, deadlines, predicted address for any creator/salt. 10,000 runs each in CI. |
+| **Invariant** ([`test/invariant/`](./test/invariant)) | 8 × 2 | Stateful fuzzing with ghost variables and forced donations: conservation, solvency, donations never claimable, exclusive outcomes, monotonic state machine, immutable terms. |
+| **Integration** ([`DeployEscrowFactoryTest`](./test/integration/DeployEscrowFactoryTest.t.sol)) | 7 | Runs the real deploy script, then drives ETH and ERC-20 trades end to end. |
 
 ```
-╭────────────────────────────┬──────────────────┬───────────────────┬────────────────┬─────────────────╮
-│ File                       │ % Lines          │ % Statements      │ % Branches     │ % Funcs         │
-├────────────────────────────┼──────────────────┼───────────────────┼────────────────┼─────────────────┤
-│ src/Escrow.sol             │ 100.00% (83/83)  │ 100.00% (102/102) │ 100.00% (27/27)│ 100.00% (16/16) │
-│ script/DeployEscrow.s.sol  │ 100.00% (7/7)    │ 100.00% (9/9)     │ 100.00% (0/0)  │ 100.00% (1/1)   │
-│ script/HelperConfig.s.sol  │ 100.00% (10/10)  │ 100.00% (6/6)     │ 100.00% (2/2)  │ 100.00% (4/4)   │
-╰────────────────────────────┴──────────────────┴───────────────────┴────────────────┴─────────────────╯
+╭──────────────────────────────────┬───────────────────┬───────────────────┬─────────────────┬─────────────────╮
+│ File                             │ % Lines           │ % Statements      │ % Branches      │ % Funcs         │
+├──────────────────────────────────┼───────────────────┼───────────────────┼─────────────────┼─────────────────┤
+│ src/Escrow.sol                   │ 100.00%           │ 100.00%           │ 100.00%         │ 100.00%         │
+│ src/EscrowFactory.sol            │ 100.00%           │ 100.00%           │ 100.00%         │ 100.00%         │
+│ script/DeployEscrowFactory.s.sol │ 100.00%           │ 100.00%           │ 100.00%         │ 100.00%         │
+│ script/HelperConfig.s.sol        │ 100.00%           │ 100.00%           │ 100.00%         │ 100.00%         │
+╰──────────────────────────────────┴───────────────────┴───────────────────┴─────────────────┴─────────────────╯
 ```
 
 ### Gas
 
-| Function | Gas (median) |
+| Operation | Gas |
 |---|---|
-| Deployment | ~1,011,000 |
-| `deposit` | 67,532 |
-| `confirmDelivery` | 74,347 |
-| `openDispute` | 52,258 |
-| `resolveDispute` | 52,895 – 76,968 |
-| `refundOnTimeout` | 52,307 |
-| `refundOnDisputeTimeout` | 52,308 |
-| `withdraw` | 32,247 |
+| Deploy `EscrowFactory` (includes the implementation) | ~2.37M (once) |
+| `createEscrow` (clone + initialize + index) | ~400k – 465k |
+| Standalone `Escrow` deployment, for comparison | ~1.53M + initialize |
+| `deposit` — ETH / ERC-20 | ~17.5k / ~58k |
+| `confirmDelivery` | ~62k |
+| `openDispute` | ~14.5k |
+| `withdraw` | ~17k (ETH) – 43k (ERC-20) |
 
-Tracked in [`.gas-snapshot`](./.gas-snapshot). CI fails if gas usage changes without the snapshot being updated.
+Execution gas from the integration flows, excluding the 21k base transaction cost. Tracked in
+[`.gas-snapshot`](./.gas-snapshot), and CI fails if gas changes without the snapshot being updated.
 
 ---
 
 ## 🔐 Security
 
-Full details are in [`SECURITY.md`](./SECURITY.md) and [`DESIGN.md` §9](./DESIGN.md#9-security-notes).
+The full analysis is in [`SECURITY.md`](./SECURITY.md) and [`DESIGN.md` §9](./DESIGN.md#9-security-notes).
 
-- **Pull payments.** State transitions only credit balances, and ETH moves only in `withdraw()`.
-- **CEI + reentrancy test.** A malicious `ReentrantReceiver` tries to double-withdraw and fails.
-- **`call` instead of `transfer`.** Works with smart-contract wallets (Safe, ERC-4337). The return value is checked.
-- **Forced-ETH safe.** Accounting never reads `address(this).balance`.
-- **Liveness.** `refundOnTimeout()` and `refundOnDisputeTimeout()` are callable by anyone.
-- **Anti front-running.** `openDispute()` is closed after the delivery deadline, so a seller can't
-  front-run the buyer's refund.
+- **Pull payments + `withdrawTo()`.** A broken or blocklisted receiver only hurts itself, and can redirect its own funds.
+- **CEI + `ReentrancyGuardTransient`.** Proven against a re-entrant ETH receiver and a malicious token hook.
+- **Safe initialization.** The implementation is locked, and clones are created and initialized atomically.
+- **Accounting never reads balances.** `s_amount` is the source of truth. Donations and forced ETH are harmless, which is checked continuously by the invariants.
+- **Liveness.** Both timeouts are permissionless.
+- **Anti front-running.** Disputes close at the delivery deadline, and CREATE2 salts are bound to the creator.
+- **Admin can't touch live trades.** The fee is snapshotted per escrow and hard-capped at 5%.
 - **Static analysis.** Slither reports 0 high and 0 medium findings. Every low or informational finding is triaged.
 
 ### Known limitations
-- The arbiter is **trusted**. Timeouts protect against an *absent* arbiter, not a dishonest one.
-- Timeouts favour the buyer. A seller who delivered but never got a confirmation must open a dispute before the delivery deadline.
-- Resolution is binary (no partial splits), payments are ETH only, and there is one trade per deployment.
+- The arbiter is **trusted**. Timeouts protect against an absent arbiter, not a dishonest one.
+- Timeouts favour the buyer. A seller who delivered must dispute before the delivery deadline if the buyer doesn't confirm.
+- Resolution is binary (no partial splits). Rebasing and fee-on-transfer tokens aren't supported.
 
 ---
 
@@ -165,13 +218,13 @@ Full details are in [`SECURITY.md`](./SECURITY.md) and [`DESIGN.md` §9](./DESIG
 
 | Layer | Tool |
 |---|---|
-| Language | Solidity `0.8.19` |
+| Language | Solidity `0.8.28` (Cancun: transient storage) |
 | Framework | [Foundry](https://book.getfoundry.sh/) (forge, cast, anvil) |
-| Testing | Unit, fuzz, stateful invariant and integration tests; custom attack mocks |
+| Libraries | [OpenZeppelin Contracts 5.7](https://docs.openzeppelin.com/contracts/5.x/): `Clones`, `Initializable`, `SafeERC20`, `ReentrancyGuardTransient`, `Ownable2Step` |
+| Testing | Unit, fuzz, stateful invariant and integration tests; malicious and quirky token mocks |
 | Static analysis | [Slither](https://github.com/crytic/slither) |
 | CI | GitHub Actions: fmt, build, tests, gas snapshot, coverage gate, Slither SARIF |
-| Deployment | `forge script` + `HelperConfig`, encrypted keystore |
-| Verification | Etherscan |
+| Deployment | `forge script` + `HelperConfig`, encrypted keystore, Etherscan verification |
 
 ---
 
@@ -190,41 +243,75 @@ make build
 make test            # everything
 make test-unit       # unit + integration
 make test-fuzz       # stateless fuzzing
-make test-invariant  # stateful fuzzing
+make test-invariant  # stateful fuzzing (ETH + ERC-20)
 make coverage
 make slither
 make help            # all commands
 ```
 
-### Local deployment and walkthrough (Anvil)
+### Local walkthrough (Anvil)
 
 ```bash
 make anvil           # terminal 1
-make deploy-anvil    # terminal 2
+make deploy-anvil    # terminal 2 — deploys the factory (owner = Anvil account #0)
 ```
 
-The Anvil config uses the default accounts: **#0 buyer, #1 seller, #2 arbiter, #3 owner**. Try the
-full flow with `cast`:
+Anvil accounts: **#0 buyer, #1 seller, #2 arbiter, #3 fee recipient**.
 
 ```bash
-ESCROW=<deployed address>
 RPC=http://localhost:8545
+FACTORY=<factory address from the deploy output>
+BUYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+SELLER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+ARBITER=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 BUYER_PK=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 SELLER_PK=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+PARAMS="(address,address,address,address,uint256,uint256,uint256,uint256)"
 
+# 1. Predict the escrow address, then create it (0.01 ETH, windows 1d / 7d / 3d)
+SALT=$(cast keccak "order-1")
+ESCROW=$(cast call $FACTORY "predictEscrowAddress(address,bytes32)(address)" $BUYER $SALT --rpc-url $RPC)
+cast send $FACTORY "createEscrow($PARAMS,bytes32)" \
+  "($BUYER,$SELLER,$ARBITER,0x0000000000000000000000000000000000000000,10000000000000000,86400,604800,259200)" $SALT \
+  --private-key $BUYER_PK --rpc-url $RPC
+cast codesize $ESCROW --rpc-url $RPC        # 45 — it's a minimal proxy
+
+# 2. Deposit, confirm, withdraw
 cast send $ESCROW "deposit()" --value 0.01ether --private-key $BUYER_PK --rpc-url $RPC
-cast send $ESCROW "confirmDelivery()"             --private-key $BUYER_PK --rpc-url $RPC
-cast call $ESCROW "s_pendingWithdrawals(address)(uint256)" 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 --rpc-url $RPC
-cast send $ESCROW "withdraw()"                    --private-key $SELLER_PK --rpc-url $RPC
+cast send $ESCROW "confirmDelivery()"           --private-key $BUYER_PK --rpc-url $RPC
+cast send $ESCROW "withdraw()"                  --private-key $SELLER_PK --rpc-url $RPC
+
+# 3. Trade history
+cast call $FACTORY "getEscrowsByParticipant(address,uint256,uint256)(address[])" $SELLER 0 10 --rpc-url $RPC
 ```
+
+<details>
+<summary><b>Same flow with an ERC-20</b> (approve the escrow <i>before</i> it exists)</summary>
+
+```bash
+TOKEN=$(forge create test/mocks/MockERC20.sol:MockERC20 --broadcast --private-key $BUYER_PK --rpc-url $RPC \
+  --constructor-args "Mock USD" mUSD 6 | grep "Deployed to" | awk '{print $3}')
+cast send $TOKEN "mint(address,uint256)" $BUYER 1000000000 --private-key $BUYER_PK --rpc-url $RPC
+
+SALT=$(cast keccak "order-2")
+ESCROW=$(cast call $FACTORY "predictEscrowAddress(address,bytes32)(address)" $BUYER $SALT --rpc-url $RPC)
+cast send $TOKEN "approve(address,uint256)" $ESCROW 1000000000 --private-key $BUYER_PK --rpc-url $RPC
+cast send $FACTORY "createEscrow($PARAMS,bytes32)" "($BUYER,$SELLER,$ARBITER,$TOKEN,1000000000,86400,604800,259200)" $SALT \
+  --private-key $BUYER_PK --rpc-url $RPC
+cast send $ESCROW "deposit()"         --private-key $BUYER_PK --rpc-url $RPC
+cast send $ESCROW "confirmDelivery()" --private-key $BUYER_PK --rpc-url $RPC
+cast send $ESCROW "withdraw()"        --private-key $SELLER_PK --rpc-url $RPC
+cast call $TOKEN "balanceOf(address)(uint256)" $SELLER --rpc-url $RPC   # 990000000 (1,000 mUSD − 1% fee)
+```
+</details>
 
 ### Sepolia deployment
 
 ```bash
-cp .env.example .env                 # fill SEPOLIA_RPC_URL and ETHERSCAN_API_KEY
+cp .env.example .env                        # fill SEPOLIA_RPC_URL and ETHERSCAN_API_KEY
 cast wallet import deployer --interactive   # encrypted keystore, no plaintext private keys
-make deploy-sepolia                  # deploys + verifies on Etherscan
-make verify                          # re-verify if Etherscan timed out
+make deploy-sepolia                         # deploys + verifies the factory and the implementation
+make verify FACTORY=0x...                   # re-verify if Etherscan timed out
 ```
 
 ---
@@ -234,23 +321,27 @@ make verify                          # re-verify if Etherscan timed out
 ```
 defi-escrow/
 ├── src/
-│   └── Escrow.sol                     # The contract (NatSpec documented)
+│   ├── Escrow.sol                        # Clone-able escrow for ETH / ERC-20 (NatSpec documented)
+│   └── EscrowFactory.sol                 # CREATE2 minimal-proxy factory + participant index
 ├── script/
-│   ├── DeployEscrow.s.sol             # Deployment script
-│   └── HelperConfig.s.sol             # Per-network parameters (Anvil / Sepolia)
+│   ├── DeployEscrowFactory.s.sol         # Deployment script
+│   └── HelperConfig.s.sol                # Per-network parameters (Anvil / Sepolia)
 ├── test/
-│   ├── unit/EscrowTest.t.sol          # 78 unit tests
-│   ├── fuzz/EscrowFuzzTest.t.sol      # 10 property-based fuzz tests
-│   ├── invariant/
-│   │   ├── EscrowHandler.t.sol        # Stateful fuzzing handler + ghost variables
-│   │   └── EscrowInvariantTest.t.sol  # 8 invariants
-│   ├── integration/DeployEscrowTest.t.sol  # Deploy script + end-to-end lifecycles
-│   └── mocks/
-│       ├── RejectingReceiver.sol      # Reverts on receive (griefing)
-│       └── ReentrantReceiver.sol      # Re-enters withdraw() (reentrancy)
-├── DESIGN.md                          # Spec: state machine, invariants, security notes
-├── SECURITY.md                        # Threat model, Slither triage
-├── .gas-snapshot                      # Gas baseline checked in CI
+│   ├── utils/EscrowTestBase.sol          # Asset-agnostic fixture (ETH or ERC-20)
+│   ├── unit/
+│   │   ├── EscrowLifecycleTests.sol      # 51 shared tests, run for ETH and ERC-20
+│   │   ├── EscrowEthTest.t.sol           # ETH suite + ETH edge cases
+│   │   ├── EscrowErc20Test.t.sol         # ERC-20 suite + token quirks
+│   │   ├── EscrowInitializeTest.t.sol    # Initialization rules
+│   │   └── EscrowFactoryTest.t.sol       # Factory behaviour
+│   ├── fuzz/EscrowFuzzTest.t.sol         # 12 property-based tests
+│   ├── invariant/                        # Handler + 8 invariants × (ETH, ERC-20)
+│   ├── integration/DeployEscrowFactoryTest.t.sol
+│   └── mocks/                            # MockERC20, FeeOnTransfer, NoReturn (USDT), Blocklist (USDC),
+│                                         # ReentrantToken, RejectingReceiver, ReentrantReceiver
+├── DESIGN.md                             # Spec: architecture, storage layout, invariants, security notes
+├── SECURITY.md                           # Threat model, token matrix, Slither triage
+├── .gas-snapshot                         # Gas baseline checked in CI
 ├── slither.config.json
 ├── foundry.toml
 └── Makefile
@@ -260,11 +351,12 @@ defi-escrow/
 
 ## 🔮 Roadmap
 
-- [ ] **EscrowFactory** with EIP-1167 minimal proxies: cheap per-trade escrows, indexed by participant.
-- [ ] **ERC-20 support** via `SafeERC20`, tested against fee-on-transfer and non-standard tokens.
-- [ ] **Partial resolutions**: `resolveDispute(sellerShareBps)` so the arbiter can split funds.
+- [x] ~~EscrowFactory with EIP-1167 minimal proxies~~ (v4)
+- [x] ~~ERC-20 support via `SafeERC20`~~ (v4)
+- [ ] **Partial resolutions:** `resolveDispute(sellerShareBps)` so the arbiter can split funds.
 - [ ] **Multi-arbiter** (2-of-3) resolution.
-- [ ] **Frontend** (Next.js + wagmi/viem) and an indexer (Ponder / The Graph).
+- [ ] **EIP-2612 `permit`** to create, approve and deposit in a single transaction.
+- [ ] **Frontend** (Next.js + wagmi/viem) and an indexer (Ponder / The Graph) on `EscrowCreated`.
 
 ---
 

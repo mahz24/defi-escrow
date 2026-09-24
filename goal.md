@@ -98,6 +98,18 @@ Un contrato de custodia (escrow) descentralizado donde:
 - [x] Deploy con keystore cifrado (sin private key en texto plano)
 - [x] Redeploy v3 en Sepolia y actualizar README
 
+### Fase 7 — Protocolo: Factory + ERC-20 (v4)
+
+- [x] `EscrowFactory` con clones EIP-1167 (CREATE2, dirección predecible y ligada al creador)
+- [x] Índice de escrows por participante con paginación
+- [x] Fee del protocolo administrado por la factory (`Ownable2Step`) y congelado en cada escrow
+- [x] Soporte ERC-20 con `SafeERC20` (USDT sin return, rechazo de fee-on-transfer)
+- [x] `withdrawTo()` para destinatarios bloqueados (USDC blocklist) o que no aceptan ETH
+- [x] `ReentrancyGuardTransient` (EIP-1153) + storage empaquetado 12 → 7 slots
+- [x] Tests: suite de ciclo de vida corriendo con ETH y ERC-20, mocks de tokens maliciosos, invariantes × 2
+- [x] Solidity 0.8.28 + OpenZeppelin 5.7
+- [ ] Deploy de la factory v4 en Sepolia y actualizar README
+
 ---
 
 ## 🔄 Flujo del contrato
@@ -128,9 +140,9 @@ fondos    ↓      ↓
 
 ## 💡 Features extra (opcionales para destacar más)
 
-- [ ] Soporte multi-token (ERC-20 además de ETH nativo)
+- [x] Soporte multi-token (ERC-20 además de ETH nativo) — v4
 - [ ] Múltiples árbitros con votación (2 de 3)
-- [ ] Historial de escrows por dirección
+- [x] Historial de escrows por dirección — `getEscrowsByParticipant` en la factory (v4)
 
 ---
 
