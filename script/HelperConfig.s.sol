@@ -2,8 +2,10 @@
 pragma solidity 0.8.19;
 
 import { Script } from "forge-std/Script.sol";
-import { Escrow } from "../src/Escrow.sol";
 
+/// @title HelperConfig
+/// @notice Returns the escrow parameters for the chain the script is running on.
+/// @dev Anvil roles are the default Anvil accounts #0-#3, so the full flow can be exercised locally with `cast`.
 contract HelperConfig is Script {
     struct NetworkConfig {
         address buyer;
@@ -14,6 +16,7 @@ contract HelperConfig is Script {
         uint256 protocolFeeBps;
         uint256 depositWindow;
         uint256 deliveryWindow;
+        uint256 disputeWindow;
     }
 
     NetworkConfig private activeNetworkConfig;
@@ -38,7 +41,8 @@ contract HelperConfig is Script {
             expectedAmount: 0.01 ether,
             protocolFeeBps: 100, // 1%
             depositWindow: 1 days,
-            deliveryWindow: 7 days
+            deliveryWindow: 7 days,
+            disputeWindow: 3 days
         });
     }
 
@@ -51,7 +55,8 @@ contract HelperConfig is Script {
             expectedAmount: 0.01 ether,
             protocolFeeBps: 100,
             depositWindow: 1 days,
-            deliveryWindow: 7 days
+            deliveryWindow: 7 days,
+            disputeWindow: 3 days
         });
     }
 

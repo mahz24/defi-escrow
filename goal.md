@@ -19,69 +19,84 @@ Un contrato de custodia (escrow) descentralizado donde:
 
 ### Fase 1 — Contrato base
 
-- [ ] Crear repo `defi-escrow` con estructura Foundry
+- [x] Crear repo `defi-escrow` con estructura Foundry
   - `src/Escrow.sol`
   - `test/unit/EscrowTest.t.sol`
   - `script/DeployEscrow.s.sol`
   - `script/HelperConfig.s.sol`
   - `README.md`
-- [ ] Definir los 3 roles: `buyer`, `seller`, `arbiter`
-- [ ] Función `deposit()` — solo el buyer puede depositar ETH
-- [ ] Estado del contrato con `enum State { AWAITING_DELIVERY, COMPLETE, DISPUTED, REFUNDED }`
-- [ ] Función `confirmDelivery()` — buyer confirma entrega → fondos van al seller
-- [ ] Función `refund()` — árbitro puede reembolsar al buyer
-- [ ] Función `resolveDispute(bool releaseToSeller)` — árbitro decide ganador
-- [ ] Función `openDispute()` — buyer o seller pueden abrir disputa
-- [ ] Timeout automático: si pasa X días sin acción, el buyer puede reclamar reembolso
-- [ ] Eventos para cada acción importante (`Deposited`, `DeliveryConfirmed`, `DisputeOpened`, `DisputeResolved`, `Refunded`)
-- [ ] Fee del protocolo (ej. 1%) deducido al liberar fondos → va a una dirección `owner`
+- [x] Definir los 3 roles: `buyer`, `seller`, `arbiter`
+- [x] Función `deposit()` — solo el buyer puede depositar ETH
+- [x] Estado del contrato con `enum State { AWAITING_DELIVERY, COMPLETE, DISPUTED, REFUNDED }`
+- [x] Función `confirmDelivery()` — buyer confirma entrega → fondos van al seller
+- [x] ~~Función `refund()`~~ — cubierto por `resolveDispute(false)` y los timeouts
+- [x] Función `resolveDispute(bool releaseToSeller)` — árbitro decide ganador
+- [x] Función `openDispute()` — buyer o seller pueden abrir disputa
+- [x] Timeout automático: si pasa X días sin acción, el buyer puede reclamar reembolso
+- [x] Eventos para cada acción importante (`Deposited`, `DeliveryConfirmed`, `DisputeOpened`, `DisputeResolved`, `Refunded`)
+- [x] Fee del protocolo (ej. 1%) deducido al liberar fondos → va a una dirección `owner`
 
 ---
 
 ### Fase 2 — Tests completos
 
-- [ ] Test: buyer deposita correctamente
-- [ ] Test: no-buyer no puede depositar
-- [ ] Test: buyer confirma entrega → seller recibe fondos menos fee
-- [ ] Test: árbitro resuelve a favor del seller
-- [ ] Test: árbitro resuelve a favor del buyer (refund)
-- [ ] Test: nadie puede abrir disputa antes del depósito
-- [ ] Test: timeout — buyer reclama reembolso después del plazo
-- [ ] Fuzz test: `resolveDispute` con diferentes amounts
-- [ ] Alcanzar **100% de coverage** con `forge coverage`
+- [x] Test: buyer deposita correctamente
+- [x] Test: no-buyer no puede depositar
+- [x] Test: buyer confirma entrega → seller recibe fondos menos fee
+- [x] Test: árbitro resuelve a favor del seller
+- [x] Test: árbitro resuelve a favor del buyer (refund)
+- [x] Test: nadie puede abrir disputa antes del depósito
+- [x] Test: timeout — buyer reclama reembolso después del plazo
+- [x] Fuzz test: `resolveDispute` con diferentes amounts
+- [x] Alcanzar **100% de coverage** con `forge coverage`
 
 ---
 
 ### Fase 3 — Scripts y deployment
 
-- [ ] `HelperConfig.s.sol` con configuración por red (local Anvil + Sepolia)
-- [ ] `DeployEscrow.s.sol` con script de deployment completo
-- [ ] Deploy en **Sepolia testnet**
-- [ ] Verificar contrato en Etherscan con `--verify`
-- [ ] Agregar dirección del contrato verificado al README
+- [x] `HelperConfig.s.sol` con configuración por red (local Anvil + Sepolia)
+- [x] `DeployEscrow.s.sol` con script de deployment completo
+- [x] Deploy en **Sepolia testnet**
+- [x] Verificar contrato en Etherscan con `--verify`
+- [x] Agregar dirección del contrato verificado al README
 
 ---
 
 ### Fase 4 — CI/CD y calidad
 
-- [ ] GitHub Actions: `forge fmt --check` + `forge build` + `forge test` en cada push
-- [ ] `.env.example` con variables necesarias
-- [ ] `.gitignore` correcto (no subir `.env`)
-- [ ] `Makefile` con comandos: `deploy`, `test`, `coverage`, `verify`
-- [ ] Gas snapshot con `forge snapshot`
+- [x] GitHub Actions: `forge fmt --check` + `forge build` + `forge test` en cada push
+- [x] `.env.example` con variables necesarias
+- [x] `.gitignore` correcto (no subir `.env`)
+- [x] `Makefile` con comandos: `deploy`, `test`, `coverage`, `verify`
+- [x] Gas snapshot con `forge snapshot`
 
 ---
 
 ### Fase 5 — README profesional
 
-- [ ] Descripción clara del proyecto y por qué existe
-- [ ] Diagrama del flujo (texto o imagen)
-- [ ] Tech stack table
-- [ ] Instrucciones de instalación y uso
-- [ ] Cómo correr los tests
-- [ ] Dirección deployada en Sepolia con link a Etherscan
-- [ ] Sección de **Security Notes** con limitaciones conocidas
-- [ ] Sección de posibles mejoras futuras
+- [x] Descripción clara del proyecto y por qué existe
+- [x] Diagrama del flujo (texto o imagen)
+- [x] Tech stack table
+- [x] Instrucciones de instalación y uso
+- [x] Cómo correr los tests
+- [x] Dirección deployada en Sepolia con link a Etherscan
+- [x] Sección de **Security Notes** con limitaciones conocidas
+- [x] Sección de posibles mejoras futuras
+
+---
+
+### Fase 6 — Nivel profesional (v3)
+
+- [x] Timeout de disputa (`refundOnDisputeTimeout`): un árbitro ausente ya no puede bloquear fondos
+- [x] `openDispute()` limitado al plazo de entrega (evita front-running del reembolso)
+- [x] NatSpec completo en el contrato
+- [x] Fuzz tests de propiedades (10) + invariant tests con handler y ghost variables (8)
+- [x] Tests de integración del script de deploy (100% coverage también en `script/`)
+- [x] Test de reentrancy con contrato atacante
+- [x] Slither en CI (SARIF) + `SECURITY.md` con threat model y triage
+- [x] Gate de coverage y `forge snapshot --check` en CI
+- [x] Deploy con keystore cifrado (sin private key en texto plano)
+- [ ] Redeploy v3 en Sepolia y actualizar README
 
 ---
 

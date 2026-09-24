@@ -1,194 +1,261 @@
-# Escrow — Diseño
+# Escrow — Design
 
-  ## Roles
-  - `buyer`: Deposit ETH in the contract.
-  - `seller`: Delivers a service or product
-  - `arbiter`: Resolves disputes between buyer and seller
-  - `owner`: Receives the protocol fee on successful deliveries
+This document is the specification the contract and the test suite are built against.
+Every rule below is enforced in [`src/Escrow.sol`](./src/Escrow.sol) and covered by at least one
+test (unit, fuzz or invariant).
 
-  ## State
-  enum State {
-    AWAITING_DEPOSIT,  // Contract created, buyer has not deposited yet
+---
+
+## 1. Roles
+
+| Role      | Responsibility                                                        |
+|-----------|-----------------------------------------------------------------------|
+| `buyer`   | Deposits the exact escrow amount and confirms delivery.               |
+| `seller`  | Delivers the product/service off-chain; receives the payout.          |
+| `arbiter` | Trusted third party that resolves disputes within the dispute window. |
+| `owner`   | Receives the protocol fee when (and only when) the seller is paid.    |
+| anyone    | Can trigger the two timeout refunds (liveness guarantees).            |
+
+`buyer`, `seller` and `arbiter` must be pairwise distinct. `owner` may coincide with the arbiter
+(e.g. a platform that both arbitrates and charges the fee).
+
+---
+
+## 2. State machine
+
+```
+AWAITING_DEPOSIT ──deposit()──► AWAITING_DELIVERY ──confirmDelivery()──────────► COMPLETE
+                                   │        │
+                                   │        └──refundOnTimeout() [after delivery deadline]──► REFUNDED
+                                   │
+                                   └──openDispute() [before delivery deadline]──► DISPUTED
+                                                                                   │
+                                          resolveDispute(true)  [before deadline] ─┼──► COMPLETE
+                                          resolveDispute(false) [before deadline] ─┼──► REFUNDED
+                                          refundOnDisputeTimeout() [after deadline]┘──► REFUNDED
+```
+
+```solidity
+enum State {
+    AWAITING_DEPOSIT,  // Deployed, buyer has not deposited yet
     AWAITING_DELIVERY, // ETH in custody, waiting for delivery confirmation
-    DISPUTED,          // Dispute opened, arbiter must resolve
-    COMPLETE,          // Delivery confirmed, funds released to seller
-    REFUNDED           // Funds returned to buyer
-  }
+    DISPUTED,          // Dispute opened, arbiter must resolve before the dispute deadline
+    COMPLETE,          // Seller (and owner fee) credited
+    REFUNDED           // Buyer credited with the full amount
+}
+```
 
-  ## State Variables (storage)
-  address public immutable i_buyer             // deposits ETH and confirms delivery
-  address public immutable i_seller            // receives funds on successful delivery
-  address public immutable i_arbiter           // resolves disputes between buyer and seller
-  address public immutable i_owner             // receives the protocol fee
+`COMPLETE` and `REFUNDED` are terminal. The only function available afterwards is `withdraw()`.
 
-  uint256 public immutable i_expectedAmount    // amount agreed by seller and buyer
-  uint256 public immutable i_protocolFeeBps    // fee in basis points (e.g. 100 = 1%)
-  uint256 public immutable i_depositDeadline   // absolute timestamp = block.timestamp depositWindow (set in constructor)
-  uint256 public immutable i_deliveryWindow    // seconds for delivery, starts counting from deposit
+---
 
-  uint256 public s_deliveryDeadline            // absolute timestamp = block.timestamp + deliveryWindow (set in deposit())
-  State public s_state                         // current contract state
+## 3. Storage
 
-  mapping(address => uint256) public s_pendingWithdrawals // tracks credited amounts for Pull pattern withdrawals
+| Variable                | Kind        | Meaning                                                            |
+|-------------------------|-------------|--------------------------------------------------------------------|
+| `i_buyer`               | immutable   | Buyer address                                                      |
+| `i_seller`              | immutable   | Seller address                                                     |
+| `i_arbiter`             | immutable   | Arbiter address                                                    |
+| `i_owner`               | immutable   | Fee recipient                                                      |
+| `i_expectedAmount`      | immutable   | Exact wei the buyer must deposit — source of truth for accounting  |
+| `i_protocolFeeBps`      | immutable   | Fee in basis points (100 = 1%), capped at `MAX_PROTOCOL_FEE_BPS`   |
+| `i_depositDeadline`     | immutable   | `deploy timestamp + depositWindow`                                 |
+| `i_deliveryWindow`      | immutable   | Seconds, counted from the deposit                                  |
+| `i_disputeWindow`       | immutable   | Seconds, counted from the moment the dispute is opened             |
+| `s_deliveryDeadline`    | storage     | Set in `deposit()`                                                 |
+| `s_disputeDeadline`     | storage     | Set in `openDispute()`                                             |
+| `s_state`               | storage     | Current `State`                                                    |
+| `s_pendingWithdrawals`  | storage     | `address => wei` credited and not yet withdrawn (pull payments)    |
+| `MAX_PROTOCOL_FEE_BPS`  | constant    | `500` (5%)                                                         |
 
-  > Note: state variables are public — Solidity auto-generates getters,
-  > making contract state inspectable on-chain and from tests without
-  > writing boilerplate.
+All variables are `public`, so every value can be read on-chain and in tests without extra getters.
+Two convenience views are exposed: `getProtocolFee()` and `getSellerPayout()`.
 
-  ## Transition Table
+The `i_` / `s_` prefixes mark immutables and storage variables. That makes the gas cost of each
+read obvious when reviewing the code.
 
-  | Function               | Who can call   | Origin state      | Destination state     | Effects                                                                 | Reverts if...                                                                 |
-  |------------------------|----------------|-------------------|-----------------------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-  | `deposit()`            | buyer          | AWAITING_DEPOSIT  | AWAITING_DELIVERY     | Stores msg.value as amount, starts deliveryWindow. Emits Deposited(buyer, expectedAmount) | msg.sender != buyer / state != AWAITING_DEPOSIT / msg.value != expectedAmount / depositWindow passed |
-  | `confirmDelivery()` | buyer | AWAITING_DELIVERY | COMPLETE | Credits pendingWithdrawals[seller] += expectedAmount - fee and pendingWithdrawals[owner] += fee. No ETH transferred yet. Emits DeliveryConfirmed(seller, expectedAmount) | msg.sender != buyer / state != AWAITING_DELIVERY |
-  | `openDispute()`        | buyer or seller| AWAITING_DELIVERY | DISPUTED              | State change only. Emits DisputeOpened(msg.sender)                      | msg.sender != buyer && msg.sender != seller / state != AWAITING_DELIVERY     |
-  | `resolveDispute(bool)` | arbiter        | DISPUTED          | COMPLETE or REFUNDED  | Credits pendingWithdrawals[seller] += expectedAmount - fee (if true) or pendingWithdrawals[buyer] += expectedAmount (if false). Emits DisputeResolved(releaseToSeller) | msg.sender != arbiter / state != DISPUTED                                    |
-  | `refundOnTimeout()`    | anyone         | AWAITING_DELIVERY | REFUNDED              | Credits pendingWithdrawals[buyer] += expectedAmount. Emits Refunded(buyer, expectedAmount)      |  state != AWAITING_DELIVERY / block.timestamp < deliveryWindow |
-  | `withdraw()` | seller, buyer, or owner | COMPLETE or REFUNDED | — | Transfers pendingWithdrawals[msg.sender]. Sets pendingWithdrawals[msg.sender] = 0. Emits Withdrawn(recipient, expectedAmount) | pendingWithdrawals[msg.sender] == 0 |
+---
 
-  > Note: `refundOnTimeout()` is intentionally callable by anyone. The outcome
-  > is always predetermined — funds always return to buyer. This prevents funds
-  > from being permanently locked if the buyer loses access to their wallet.
-  > The caller only pays gas; they receive nothing.
+## 4. Transition table
 
+| Function                   | Caller            | From              | To                  | Time condition                          | Effects / events |
+|----------------------------|-------------------|-------------------|---------------------|-----------------------------------------|------------------|
+| `deposit()`                | buyer             | AWAITING_DEPOSIT  | AWAITING_DELIVERY   | `now <= i_depositDeadline`              | `s_deliveryDeadline = now + i_deliveryWindow`. Emits `Deposited(buyer, amount, deliveryDeadline)` |
+| `confirmDelivery()`        | buyer             | AWAITING_DELIVERY | COMPLETE            | —                                       | Credits seller `amount - fee`, owner `fee`. Emits `ProtocolFeeCharged(owner, fee)`, `DeliveryConfirmed(seller, amount - fee)` |
+| `openDispute()`            | buyer or seller   | AWAITING_DELIVERY | DISPUTED            | `now <= s_deliveryDeadline`             | `s_disputeDeadline = now + i_disputeWindow`. Emits `DisputeOpened(caller, disputeDeadline)` |
+| `resolveDispute(true)`     | arbiter           | DISPUTED          | COMPLETE            | `now <= s_disputeDeadline`              | Credits seller `amount - fee`, owner `fee`. Emits `ProtocolFeeCharged`, `DisputeResolved(seller, true, amount - fee)` |
+| `resolveDispute(false)`    | arbiter           | DISPUTED          | REFUNDED            | `now <= s_disputeDeadline`              | Credits buyer `amount`. Emits `DisputeResolved(buyer, false, amount)` |
+| `refundOnTimeout()`        | anyone            | AWAITING_DELIVERY | REFUNDED            | `now > s_deliveryDeadline`              | Credits buyer `amount`. Emits `Refunded(buyer, amount)` |
+| `refundOnDisputeTimeout()` | anyone            | DISPUTED          | REFUNDED            | `now > s_disputeDeadline`               | Credits buyer `amount`. Emits `Refunded(buyer, amount)` |
+| `withdraw()`               | any credited addr | COMPLETE/REFUNDED | —                   | —                                       | Zeroes the caller's credit, emits `Withdrawn(caller, credit)`, then sends ETH |
 
-  ## Invariants
+Deadline checks are inclusive for the action that has to happen *before* the deadline
+(`deposit`, `openDispute`, `resolveDispute`) and strict for the timeouts (`> deadline`). So at
+every second exactly one side of each deadline is valid.
 
-  1. While state == AWAITING_DELIVERY or DISPUTED:
-    expectedAmount > 0 and no pendingWithdrawals exist
-    (the deposit is fully locked, no withdrawals yet credited)
+---
 
-  2. buyer, seller, and arbiter are always distinct addresses
-    (enforced in constructor)
+## 5. Invariants
 
-  3. ETH can only be deposited once
-    (deposit() is only valid from AWAITING_DEPOSIT state)
+Each invariant is checked by the stateful fuzzing suite
+([`test/invariant/EscrowInvariantTest.t.sol`](./test/invariant/EscrowInvariantTest.t.sol)) after every
+random call. A campaign runs 128,000+ calls.
 
-  4. Once state == COMPLETE or REFUNDED:
-     sum(pendingWithdrawals) == expectedAmount
-     (All money is credited, but not yet withdrawn)
+| # | Invariant | Test |
+|---|-----------|------|
+| 1 | While the escrow is not finalized, no address has credited funds. | `invariant_noCreditsBeforeFinalization` |
+| 2 | ETH held + ETH withdrawn == ETH deposited. No wei is ever created or lost. | `invariant_fundsAreConserved` |
+| 3 | The contract balance always equals what it owes (solvency). | `invariant_balanceEqualsOwed` |
+| 4 | Once finalized, credited + withdrawn == `i_expectedAmount`. | `invariant_finalizedEscrowAccountsForFullAmount` |
+| 5 | Outcomes are exclusive: `COMPLETE` pays only seller + owner (exact split). `REFUNDED` pays only the buyer, in full. | `invariant_outcomesAreExclusive` |
+| 6 | The state machine only moves forward, and a terminal state never changes. | `invariant_stateMachineIsMonotonic` |
+| 7 | Deadlines match the state that set them. | `invariant_deadlinesAreConsistent` |
+| 8 | `i_protocolFeeBps <= 500`. | `invariant_feeWithinCap` |
+| 9 | `buyer`, `seller` and `arbiter` are pairwise distinct and non-zero. | constructor unit tests |
 
-  5. protocolFeeBps <= 500 at all times
-    (enforced in constructor, cap protects against abusive deployments)
+---
 
+## 6. Must-revert cases
 
-  ## Forbidden Cases (must revert)
+**Constructor**
+- Any role is `address(0)`.
+- `buyer == seller`, `buyer == arbiter` or `seller == arbiter`.
+- `_expectedAmount == 0`.
+- `_protocolFeeBps > 500`.
+- `_depositWindow`, `_deliveryWindow` or `_disputeWindow` is `0`.
 
-  - deposit() called more than once
-  - deposit() with msg.value == 0
-  - deposit() after depositWindow has passed
-  - confirmDelivery() called by seller or arbiter
-  - confirmDelivery() when state == DISPUTED
-  - openDispute() called by arbiter
-  - openDispute() when state == AWAITING_DEPOSIT, COMPLETE, or REFUNDED
-  - resolveDispute() called by buyer or seller
-  - resolveDispute() when state != DISPUTED
-  - refundOnTimeout() before deliveryWindow has passed
-  - refundOnTimeout() when state == DISPUTED (arbiter must resolve instead)
-  - Constructor with buyer == seller, buyer == arbiter, or seller == arbiter
-  - Constructor with _buyer == address(0)
-  - Constructor with _seller == address(0)
-  - Constructor with _arbiter == address(0)
-  - Constructor with _owner == address(0)
-  - Constructor with _protocolFeeBps > 500 (5% max cap)
-  - Constructor with _depositWindow == 0
-  - Constructor with _deliveryWindow == 0
-  - Constructor with _expectedAmount == 0
-  - deposit() with msg.value != expectedAmount
+**Runtime**
+- `deposit()`: not the buyer, not in `AWAITING_DEPOSIT` (no double deposit), after the deposit
+  deadline, or `msg.value != i_expectedAmount`.
+- `confirmDelivery()`: not the buyer, or not in `AWAITING_DELIVERY` (e.g. while disputed).
+- `openDispute()`: not buyer/seller (the arbiter can't open one), not in `AWAITING_DELIVERY`, or after
+  the delivery deadline.
+- `resolveDispute()`: not the arbiter, not in `DISPUTED`, or after the dispute deadline.
+- `refundOnTimeout()`: not in `AWAITING_DELIVERY` (e.g. while disputed), or at/before the delivery deadline.
+- `refundOnDisputeTimeout()`: not in `DISPUTED`, or at/before the dispute deadline.
+- `withdraw()`: escrow not finalized, or nothing credited to the caller.
+- Plain ETH transfers: the contract has no `receive`/`fallback`, so they revert.
 
-  > Note: once buyer calls confirmDelivery(), the dispute window closes.
-  > Buyer assumes full risk at confirmation — protection must be requested before confirming.
+---
 
-  > Note: protocol fee is only charged when seller receives funds.
-  > Refunds (timeout or dispute) always return the full amount to buyer.
+## 7. Constructor
 
+```solidity
+constructor(
+    address _buyer,
+    address _seller,
+    address _arbiter,
+    address _owner,
+    uint256 _expectedAmount,  // exact wei the buyer must deposit
+    uint256 _protocolFeeBps,  // 100 = 1%, max 500
+    uint256 _depositWindow,   // seconds from deployment to deposit
+    uint256 _deliveryWindow,  // seconds from deposit until anyone can refund
+    uint256 _disputeWindow    // seconds from dispute opening for the arbiter to act
+)
+```
 
-  ## Constructor Parameters
+- **Non-zero roles.** A zero address would make the escrow unusable, because no one could satisfy the role checks.
+- **`_owner` is separate from the deployer.** The fee recipient can be a treasury or multisig.
+- **`_depositWindow`.** The escrow can't wait forever for a deposit.
+- **`_deliveryWindow`.** Starts at deposit, so the seller always gets the full window.
+- **`_disputeWindow`.** Bounds how long an arbiter can hold funds hostage by doing nothing.
+- **`_protocolFeeBps`.** The 5% cap is a safety bound against abusive deployments. The intended value is 1%.
+- **`_expectedAmount`.** Fixed at deployment, so there is no ambiguity about the price.
 
-  constructor(
-      address _buyer,               // address that will deposit and confirm delivery
-      address _seller,              // address that will receive funds
-      address _arbiter,             // address that will resolve disputes
-      address _owner,               // address that receives the protocol fee
-      uint256 _protocolFeeBps,      // fee percentage in basis points (100 = 1%)
-      uint256 _depositDeadline,       // seconds buyer has to deposit after deployment
-      uint256 _deliveryWindow,      // seconds buyer has to confirm delivery after deposit
-      uint256 _expectedAmount       // exact ETH amount the buyer must deposit
-  )
+---
 
-  // Validations:
-  // All addresses must be non-zero — a zero address would make the contract
-  // permanently unusable since no one can satisfy role-based checks.
+## 8. Payment pattern: pull over push
 
-  ### Why each param:
-  - _buyer / _seller / _arbiter → define the three roles, must be distinct
-  - _owner → decouples fee recipient from deployer, more flexible
-  - _depositWindow → prevents the contract from waiting forever for a deposit
-  - _deliveryWindow → starts on deposit, gives buyer a fair window to confirm
-  - _protocolFeeBps → capped at 500 (5% max). Recommended production value is 100 (1%). Cap exists as a safety bound, not as the intended operating fee.
-  - _expectedAmount → exact ETH the buyer must deposit. Set at deploy time to prevent ambiguity over the escrow price
+`confirmDelivery()`, `resolveDispute()` and the timeout functions only credit
+`s_pendingWithdrawals`. ETH leaves the contract only in `withdraw()`.
 
+With push payments, a seller contract whose `receive()` reverts would make `confirmDelivery()`
+revert forever, and the funds would be trapped. With pull payments, finalization and ETH transfer
+are decoupled. A failing `withdraw()` only affects the caller, while the escrow state and every
+other party's credit are unaffected (`testWithdraw_revertsIfCallFails`).
 
-  ## Payment Pattern
+---
 
-  This contract uses the **Pull Payment** pattern instead of Push.
+## 9. Security notes
 
-  - `confirmDelivery()` and `resolveDispute()` only credit a
-    `mapping(address => uint256) pendingWithdrawals` — no ETH moves.
-  - Funds are transferred only when the recipient calls `withdraw()`.
+### 9.1 ETH transfer method
+`transfer`/`send` forward only 2,300 gas, which breaks smart-contract wallets (Safe, ERC-4337
+accounts). `withdraw()` uses `call{value: amount}("")` and reverts with
+`Escrow__WithdrawalFailed()` if the call fails.
 
-  **Why Pull over Push:**
-  With Push, if the seller is a malicious contract whose `receive()`
-  reverts, `confirmDelivery()` fails entirely — the escrow never reaches
-  COMPLETE and funds are permanently trapped. With Pull, escrow
-  finalization is separated from ETH transfer. If `withdraw()` fails,
-  it only affects the caller — the escrow state is already COMPLETE.
+### 9.2 Reentrancy
+`withdraw()` follows Checks-Effects-Interactions strictly: it zeroes the credit and emits the event
+before the external call. Re-entering finds a zero balance and reverts with `Escrow__NothingToWithdraw`.
+This is proven by `testWithdraw_reentrancyCannotDoubleSpend`, which uses the malicious
+`ReentrantReceiver` mock. No other function performs external calls, so no `nonReentrant` guard is needed.
 
-  **New function needed:**
-  `withdraw()` — callable by seller, buyer or owner after state == COMPLETE
-  or REFUNDED. Transfers pendingWithdrawals[msg.sender] to caller.
+### 9.3 Forced ETH
+`selfdestruct` or coinbase rewards can push ETH into the contract without calling any function.
+The contract never reads `address(this).balance`. `i_expectedAmount` (immutable) is the only
+source of truth, so forced ETH cannot break accounting. It simply stays in the contract.
 
+### 9.4 Timestamp dependence
+Validators can skew `block.timestamp` by a few seconds. That is negligible against windows measured
+in days. Boundary behaviour at `deadline` and `deadline + 1` is covered by unit and fuzz tests.
 
-  ## Security Notes
+### 9.5 Liveness: funds can never be locked forever
 
-  ### 1. ETH Transfer Method
-  `transfer` and `send` have a fixed gas stipend of 2,300 gas which is
-  not enough for contracts with non-trivial `receive()` functions,
-  causing reverts and trapped funds. This contract uses `call` instead,
-  which forwards all available gas. The return bool is always checked:
+| Stuck party           | Escape hatch                                                    |
+|-----------------------|-----------------------------------------------------------------|
+| Buyer never deposits  | Nothing is at risk. The escrow expires after `i_depositDeadline`. |
+| Buyer disappears      | `refundOnTimeout()` after the delivery deadline, callable by anyone. |
+| Arbiter disappears    | `refundOnDisputeTimeout()` after the dispute deadline, callable by anyone. |
+| Recipient can't receive ETH | Only their own credit is stuck. Everyone else can still withdraw. |
 
-  (bool ok,) = recipient.call{value: amount}("");
-  require(ok, "ETH transfer failed");
+### 9.6 Front-running the timeout
+In v2, a seller could watch the mempool and call `openDispute()` right after the delivery
+deadline, blocking the buyer's `refundOnTimeout()`. v3 closes this: `openDispute()` reverts once
+the delivery deadline has passed (`testOpenDispute_revertsAfterDeliveryDeadline`).
 
-  ### 2. Reentrancy
-  Reentrancy occurs when an external contract re-enters a function
-  before its execution completes, potentially draining funds.
-  This contract follows the CEI pattern (Checks-Effects-Interactions)
-  on every fund-moving function — state is always updated before
-  any external call. The Pull pattern provides an additional layer
-  of protection since no ETH moves in `confirmDelivery()` or
-  `resolveDispute()`.
+### 9.7 Static analysis
+Slither reports no high- or medium-severity findings. The low and informational ones are triaged in
+[`SECURITY.md`](./SECURITY.md).
 
-  ### 3. Balance Pitfall (strict equality)
-  `address(this).balance` can be manipulated by anyone via
-  `selfdestruct` — ETH can be forced into the contract bypassing
-  `receive()`. This contract never uses `address(this).balance`
-  for internal logic. Instead, the `expectedAmount` state variable tracks the deposited ETH internally.
-  Only `deposit()` can modify it, making it immune to forced ETH injection.
+---
 
-  ### 4. Known Limitations
-  - Arbiter is a single trusted address — no multi-sig support.
-  - Once buyer calls `confirmDelivery()`, no dispute can be opened.
-    Buyer assumes full risk at confirmation.
-  - Protocol fee is only charged when seller receives funds.
-    Refunds always return the full deposited amount to buyer.
+## 10. Known limitations and trade-offs
 
+- **Trusted single arbiter.** The arbiter can decide either way within the dispute window. The
+  dispute timeout protects against an *absent* arbiter, not a *malicious* one.
+- **Timeouts favour the buyer.** If the seller delivers but the buyer never confirms, the seller must
+  open a dispute before the delivery deadline, or anyone can refund the buyer afterwards. The
+  same rule applies if the arbiter ignores a dispute. This is a deliberate choice: the
+  party that has already paid is protected by default.
+- **Confirmation is final.** After `confirmDelivery()` the buyer cannot dispute.
+- **Binary resolution.** The arbiter cannot split funds between the parties.
+- **Fee only on success.** Refunds always return 100% of the deposit. The protocol earns nothing on
+  failed trades.
+- **One trade per contract.** Each escrow is a separate deployment with fixed parameters.
+- **ETH only.** No ERC-20 support.
 
-  ## Events
+---
 
-  event Deposited(address indexed buyer, uint256 amount);
-  event DeliveryConfirmed(address indexed seller, uint256 amount);
-  event DisputeOpened(address indexed openedBy);
-  event DisputeResolved(bool releaseToSeller);
-  event Refunded(address indexed buyer, uint256 amount);
-  event Withdrawn(address indexed recipient, uint256 amount);
+## 11. Events
+
+```solidity
+event Deposited(address indexed buyer, uint256 amount, uint256 deliveryDeadline);
+event DeliveryConfirmed(address indexed seller, uint256 amount);        // net amount to seller
+event ProtocolFeeCharged(address indexed owner, uint256 fee);
+event DisputeOpened(address indexed openedBy, uint256 disputeDeadline);
+event DisputeResolved(address indexed recipient, bool releaseToSeller, uint256 amount);
+event Refunded(address indexed buyer, uint256 amount);                  // either timeout
+event Withdrawn(address indexed recipient, uint256 amount);
+```
+
+Every event carries the amounts and deadlines an off-chain indexer needs to rebuild the full
+history without extra RPC calls.
+
+---
+
+## 12. Changelog
+
+| Version | Changes |
+|---------|---------|
+| v1 | Initial escrow: deposit, confirm, dispute, delivery timeout, pull payments. |
+| v2 | `DeliveryConfirmed` emits the net seller amount. |
+| v3 | `disputeWindow` + `refundOnDisputeTimeout()` (absent-arbiter liveness). `openDispute()` is bounded by the delivery deadline (anti front-running). `resolveDispute()` is bounded by the dispute deadline. `ProtocolFeeCharged` event and richer `Deposited`/`DisputeOpened`/`DisputeResolved` events. `MAX_PROTOCOL_FEE_BPS` constant. `getProtocolFee()` / `getSellerPayout()` views. Full NatSpec. |

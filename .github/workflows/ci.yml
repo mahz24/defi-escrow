@@ -5,13 +5,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   FOUNDRY_PROFILE: ci
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    name: Forge format / build / test
+  test:
+    name: Format / build / test / coverage
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,10 +24,12 @@ jobs:
         with:
           submodules: recursive
 
+      # Pinned: per-test gas accounting changes between Forge releases, so the
+      # .gas-snapshot baseline is only comparable with the version that generated it.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.5.1
 
       - name: Show Forge version
         run: forge --version
@@ -33,8 +40,40 @@ jobs:
       - name: Build
         run: forge build --sizes
 
-      - name: Run tests
-        run: forge test -vvv
+      - name: Unit + integration + fuzz (10k runs) + invariant tests
+        run: forge test
 
-      - name: Coverage summary
-        run: forge coverage --report summary
+      - name: Gas snapshot check
+        run: forge snapshot --check --tolerance 1 --no-match-path "test/{fuzz,invariant}/*"
+
+      - name: Coverage gate (Escrow.sol must stay at 100%)
+        env:
+          FOUNDRY_PROFILE: default
+        run: |
+          forge coverage --report summary --no-match-coverage "test|script" | tee coverage.txt
+          hits=$(grep -E "^\| src/Escrow.sol" coverage.txt | grep -o "100.00%" | wc -l)
+          if [ "$hits" -ne 4 ]; then echo "::error::src/Escrow.sol is not at 100% lines/statements/branches/functions"; exit 1; fi
+
+  slither:
+    name: Static analysis (Slither)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.1
+        with:
+          fail-on: medium
+          sarif: results.sarif
+
+      - name: Upload SARIF to GitHub code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

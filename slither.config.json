@@ -1,0 +1,5 @@
+{
+  "filter_paths": "lib|test|script",
+  "detectors_to_exclude": "naming-convention",
+  "fail_on": "medium"
+}
